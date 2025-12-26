@@ -1,105 +1,89 @@
 import streamlit as st
-import yfinance as yf
 import uuid
 from datetime import datetime
-from sled_core import SLEDEngine
+import pandas as pd
+import matplotlib.pyplot as plt
 
-def safe_history(ticker: str, period: str = "3mo"):
-    try:
-        t = yf.Ticker(ticker)
-        df = t.history(period=period, auto_adjust=True)
-        if df is None or df.empty or "Close" not in df.columns:
-            return None
-        return df
-    except Exception:
-        return None
-        
+from sled_core import safe_history, SLEDEngine
+
 st.set_page_config(page_title="Sales & Marketing", layout="wide")
 st.title("📈 Sales & Marketing")
-st.caption("Market scans • SLED intelligence")
+st.caption("Runs SLED scans and submits results into the system flow")
 
-engine = SLEDEngine()
-
-# ==================================================
-# SAFETY
-# ==================================================
-for key in ["inputs_log"]:
+for key in ["inputs_log", "sales_last_scan"]:
     if key not in st.session_state:
         st.session_state[key] = []
 
-# ==================================================
-# 10-MIN STOCK SCAN (MANUAL TRIGGER)
-# ==================================================
-st.subheader("⏱ SLED 10-Min Stock Scan")
+engine = SLEDEngine(window=14)
 
-tickers = st.text_input(
-    "Tickers (comma-separated)",
-    "AAPL,MSFT,NVDA"
-)
+def price_chart(df, title):
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.plot(df.index, df["Close"])
+    ax.set_title(title)
+    ax.grid(True, alpha=0.2)
+    return fig
 
-lookback = st.selectbox(
-    "Lookback Period",
-    ["1mo", "3mo", "6mo"],
-    index=1
-)
+st.subheader("⏱ SLED Market Scan")
+tickers = st.text_input("Tickers (comma-separated)", "AAPL,MSFT,NVDA,SPY")
+lookback = st.selectbox("Lookback Period", ["1mo", "3mo", "6mo"], index=1)
 
-if st.button("Run SLED Scan"):
-    results = []
+if st.button("Run SLED Scan Now"):
+    out_rows = []
+    for t in [x.strip().upper() for x in tickers.split(",") if x.strip()]:
+        df = safe_history(t, lookback)
+        if df is None:
+            out_rows.append({"Ticker": t, "Status": "NO_DATA"})
+            continue
 
-    for t in [x.strip().upper() for x in tickers.split(",")]:
-        try:
-            df = yf.download(
-                t,
-                period=lookback,
-                progress=False
-            )
+        signal, metrics = engine.evaluate(df)
+        price = float(df["Close"].iloc[-1])
 
-            signal, metrics = engine.evaluate(df)
+        # Build business input for the hotel flow
+        content = (
+            f"SLED Scan | {t} | Price {price:.2f} | Signal {signal} | "
+            f"Z {metrics.get('Z_Trap')} | Gate {metrics.get('Gate')}"
+        )
 
-            price = df["Close"].iloc[-1]
+        entry = {
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Transaction_Code": f"TX-{uuid.uuid4().hex[:10].upper()}",
+            "Input_Type": "SALES_SCAN",
+            "Status": "ARRIVED",
+            "Preview": content[:120],
+            "Raw": content,
+            "Ticker": t,
+            "Signal": signal,
+        }
+        st.session_state.inputs_log.insert(0, entry)
 
-            content = (
-                f"SLED Scan | {t} | Price {price:.2f} | "
-                f"Signal {signal} | "
-                f"Z {metrics.get('Z_Trap')} | "
-                f"Gate {metrics.get('Gate')}"
-            )
+        out_rows.append({
+            "Ticker": t,
+            "Price": metrics.get("Price"),
+            "Signal": signal,
+            "Z_Trap": metrics.get("Z_Trap"),
+            "Gate": metrics.get("Gate"),
+        })
 
-            entry = {
-                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Transaction_Code": f"TX-{uuid.uuid4().hex[:10].upper()}",
-                "Input_Type": "SALES_SCAN",
-                "Status": "ARRIVED",
-                "Preview": content[:120],
-                "Raw": content,
-                "Ticker": t,
-                "Signal": signal,
-            }
+    st.session_state.sales_last_scan = out_rows
+    st.success("Scan complete. Results injected into Doorman flow.")
 
-            st.session_state.inputs_log.insert(0, entry)
-            results.append(entry)
+    df_out = pd.DataFrame(out_rows)
+    st.dataframe(df_out, use_container_width=True)
 
-        except Exception as e:
-            st.warning(f"{t}: failed to fetch data")
+    # Visual: chart first valid ticker
+    first_ok = next((r for r in out_rows if r.get("Signal") and r.get("Signal") != "NO_DATA"), None)
+    if first_ok:
+        df_chart = safe_history(first_ok["Ticker"], lookback)
+        if df_chart is not None:
+            st.pyplot(price_chart(df_chart.tail(60), f"{first_ok['Ticker']} Close (last ~60 sessions)"))
 
-    if results:
-        st.success("SLED scan complete — inputs sent to system")
-        st.dataframe(results, use_container_width=True)
-
-# ==================================================
-# INDIVIDUAL BUSINESS REPORT
-# ==================================================
 st.markdown("---")
 st.subheader("📄 Individual Business Report")
-
-ticker = st.text_input("Stock ticker (optional)")
-report = st.text_area(
-    "Business information\n(stores, board, assets, investments)"
-)
+ticker = st.text_input("Report ticker (optional)", "").upper().strip()
+report = st.text_area("Business info (board, stores, assets, investments, capex, etc.)", height=140)
 
 if st.button("Submit Business Report"):
     content = f"Business report {ticker}: {report}"
-
     entry = {
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Transaction_Code": f"TX-{uuid.uuid4().hex[:10].upper()}",
@@ -110,10 +94,8 @@ if st.button("Submit Business Report"):
         "Ticker": ticker,
         "Signal": "INFO",
     }
-
     st.session_state.inputs_log.insert(0, entry)
-
-    st.success("Business report sent into system")
+    st.success("Business report injected into flow.")
 
 st.markdown("---")
 if st.button("⬅ Return to Console"):
