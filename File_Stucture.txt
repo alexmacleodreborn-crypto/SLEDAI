@@ -1,6 +1,6 @@
 SLEDAI/
 │
-├── streamlit_app.py      ← HOME / DASHBOARD
-├── Doorman.py            ← DOORMAN (MAIN TREE)
-├── requirements.txt
-├── README.md
+├── streamlit_app.py   ← Home / Dashboard
+│
+└── pages/
+    └── 1_Doorman.py   ← Doorman page
