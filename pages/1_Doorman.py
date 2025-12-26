@@ -11,7 +11,7 @@ st.title("🚪 Doorman")
 st.caption("Passive intake • Transaction tagging • No interruption")
 
 # ==================================================
-# INPUT
+# INPUTS
 # ==================================================
 text_input = st.text_area("Text Input", height=160)
 file_input = st.file_uploader(
@@ -22,7 +22,7 @@ file_input = st.file_uploader(
 submit = st.button("Process Input")
 
 # ==================================================
-# PROCESS
+# PROCESSING
 # ==================================================
 if submit:
     if not text_input and not file_input:
@@ -53,6 +53,7 @@ if submit:
         if "inputs_log" not in st.session_state:
             st.session_state.inputs_log = []
 
+        # newest on top
         st.session_state.inputs_log.insert(0, entry)
 
         st.success("Input accepted")
