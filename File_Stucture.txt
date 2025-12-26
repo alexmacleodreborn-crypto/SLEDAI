@@ -1,9 +1,9 @@
 SLEDAI/
 │
-├── streamlit_app.py        ← HOME / MANAGER
-├── requirements.txt
-├── README.md
+├── streamlit_app.py
 │
 └── pages/
     ├── 1_Doorman.py
-    └── 2_Concierge.py      ← NEW
+    ├── 2_Concierge.py
+    ├── 3_Reception.py      ← NEW
+    └── 4_SalesMarketing.py ← NEW
