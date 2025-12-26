@@ -4,6 +4,16 @@ import uuid
 from datetime import datetime
 from sled_core import SLEDEngine
 
+def safe_history(ticker: str, period: str = "3mo"):
+    try:
+        t = yf.Ticker(ticker)
+        df = t.history(period=period, auto_adjust=True)
+        if df is None or df.empty or "Close" not in df.columns:
+            return None
+        return df
+    except Exception:
+        return None
+        
 st.set_page_config(page_title="Sales & Marketing", layout="wide")
 st.title("📈 Sales & Marketing")
 st.caption("Market scans • SLED intelligence")
