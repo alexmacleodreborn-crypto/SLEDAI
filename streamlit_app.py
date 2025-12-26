@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(
-    page_title="SLEDAI Console",
-    layout="wide",
-)
+st.set_page_config(page_title="SLEDAI Console", layout="wide")
 
 st.title("🧿 SLEDAI — Manager Console (A7DO)")
 st.caption("Controlled flow of stock intelligence")
@@ -12,22 +9,23 @@ st.caption("Controlled flow of stock intelligence")
 # ==================================================
 # GLOBAL MEMORY
 # ==================================================
-if "inputs_log" not in st.session_state:
-    st.session_state.inputs_log = []
-
-if "concierge_log" not in st.session_state:
-    st.session_state.concierge_log = []
+for key in ["inputs_log", "concierge_log", "rooms_log", "couplings_log"]:
+    if key not in st.session_state:
+        st.session_state[key] = []
 
 # ==================================================
 # NAVIGATION
 # ==================================================
-col1, col2 = st.columns(2)
-with col1:
+cnav1, cnav2, cnav3 = st.columns(3)
+with cnav1:
     if st.button("🚪 Doorman"):
         st.switch_page("pages/1_Doorman.py")
-with col2:
+with cnav2:
     if st.button("🛎 Concierge"):
         st.switch_page("pages/2_Concierge.py")
+with cnav3:
+    if st.button("🏨 Reception / Sales"):
+        st.switch_page("pages/3_Reception.py")
 
 st.markdown("---")
 
@@ -36,51 +34,27 @@ st.markdown("---")
 # ==================================================
 c1, c2, c3 = st.columns(3)
 
-# --------------------------------------------------
-# SALES & MARKETING (PLACEHOLDER)
-# --------------------------------------------------
 with c1:
-    st.subheader("📈 Sales & Marketing Report")
-    st.info("Awaiting Concierge routing…")
-    st.caption("Buy / Sell / Hold signals will appear here")
+    st.subheader("📈 Sales & Marketing Signals")
+    sales = [r for r in st.session_state.rooms_log if r["Source"] == "SALES"]
+    if sales:
+        st.dataframe(pd.DataFrame(sales)[["Room_ID","Ticker","Signal"]], use_container_width=True)
+    else:
+        st.caption("No sales signals yet.")
 
-# --------------------------------------------------
-# ARRIVING INPUTS
-# --------------------------------------------------
 with c2:
-    st.subheader("📥 Arriving Inputs")
-    if st.session_state.inputs_log:
-        df = pd.DataFrame(st.session_state.inputs_log)
-        st.dataframe(
-            df[["Timestamp", "Transaction_Code", "Input_Type"]],
-            use_container_width=True,
-        )
+    st.subheader("🏨 Inputs In-House (Rooms)")
+    if st.session_state.rooms_log:
+        st.dataframe(pd.DataFrame(st.session_state.rooms_log)[["Room_ID","Category","Status"]], use_container_width=True)
     else:
-        st.caption("No incoming inputs yet.")
+        st.caption("No rooms yet.")
 
-# --------------------------------------------------
-# CONCIERGE ALERTS
-# --------------------------------------------------
 with c3:
-    st.subheader("🚨 Concierge Alerts")
-    alerts = [
-        c for c in st.session_state.concierge_log
-        if c["Action_Required"] != "NONE"
-    ]
-
-    if alerts:
-        df = pd.DataFrame(alerts)
-        st.dataframe(
-            df[[
-                "Transaction_Code",
-                "Category",
-                "Action_Required",
-                "Room_ID"
-            ]],
-            use_container_width=True,
-        )
+    st.subheader("🔗 Active Couplings")
+    if st.session_state.couplings_log:
+        st.dataframe(pd.DataFrame(st.session_state.couplings_log), use_container_width=True)
     else:
-        st.caption("No actions required.")
+        st.caption("No couplings detected.")
 
 st.markdown("---")
-st.caption("SLEDAI v0.2 • Concierge active")
+st.caption("SLEDAI v0.3 • Reception & Sales active")
