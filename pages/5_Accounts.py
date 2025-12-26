@@ -9,7 +9,9 @@ from sled_core import safe_history
 st.set_page_config(page_title="Accounts", layout="wide")
 st.title("💰 Accounts — Portfolio (Paper)")
 st.caption("Holdings • Avg cost • Live price • Unrealized PnL + charts")
-
+if st.button("🤖 Auto-Apply Bullseye Trades"):
+    auto_trade_from_sales()
+    st.success("Bullseye trades applied.")
 for key in ["portfolio", "trade_log"]:
     if key not in st.session_state:
         st.session_state[key] = []
