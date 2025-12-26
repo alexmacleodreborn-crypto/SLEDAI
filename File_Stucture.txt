@@ -1,10 +1,13 @@
 SLEDAI/
 │
 ├── streamlit_app.py
+├── requirements.txt
+├── README.md
+├── sled_core.py
 │
 └── pages/
     ├── 1_Doorman.py
     ├── 2_Concierge.py
-    ├── 3_Reception.py      ← NEW
-    ├── 4_SalesMarketing.py ← NEW
-		└── 5_Accounts.py
+    ├── 3_Reception.py
+    ├── 4_SalesMarketing.py
+    └── 5_Accounts.py
