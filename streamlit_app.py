@@ -2,62 +2,71 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(page_title="SLEDAI Console", layout="wide")
-
 st.title("🧿 SLEDAI — Manager Console (A7DO)")
 st.caption("Controlled flow of stock intelligence")
 
-# ==================================================
-# GLOBAL MEMORY
-# ==================================================
-for key in ["inputs_log", "concierge_log", "rooms_log", "couplings_log"]:
+# Shared state
+for key in ["inputs_log", "concierge_log", "rooms_log", "couplings_log", "portfolio", "trade_log", "sales_last_scan"]:
     if key not in st.session_state:
         st.session_state[key] = []
 
-cnav1, cnav2, cnav3, cnav4 = st.columns(4)
-with cnav1:
-    if st.button("🚪 Doorman"):
-        st.switch_page("pages/1_Doorman.py")
-with cnav2:
-    if st.button("🛎 Concierge"):
-        st.switch_page("pages/2_Concierge.py")
-with cnav3:
-    if st.button("🏨 Reception"):
-        st.switch_page("pages/3_Reception.py")
-with cnav4:
-    if st.button("💰 Accounts"):
-        st.switch_page("pages/5_Accounts.py")
-
-# ==================================================
-# DASHBOARD PANELS
-# ==================================================
-c1, c2, c3 = st.columns(3)
-
+# Nav
+c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
-    st.subheader("📈 Sales & Marketing Signals")
-    sales = [r for r in st.session_state.rooms_log if r["Source"] == "SALES"]
-    if sales:
-        st.dataframe(pd.DataFrame(sales)[["Room_ID","Ticker","Signal"]], use_container_width=True)
-    else:
-        st.caption("No sales signals yet.")
-
+    if st.button("🚪 Doorman"): st.switch_page("pages/1_Doorman.py")
 with c2:
-    st.subheader("🏨 Inputs In-House (Rooms)")
+    if st.button("🛎 Concierge"): st.switch_page("pages/2_Concierge.py")
+with c3:
+    if st.button("🏨 Reception"): st.switch_page("pages/3_Reception.py")
+with c4:
+    if st.button("📈 Sales"): st.switch_page("pages/4_SalesMarketing.py")
+with c5:
+    if st.button("💰 Accounts"): st.switch_page("pages/5_Accounts.py")
+
+st.markdown("---")
+
+left, mid, right = st.columns(3)
+
+with left:
+    st.subheader("📥 Arriving Inputs")
+    if st.session_state.inputs_log:
+        df = pd.DataFrame(st.session_state.inputs_log)
+        st.dataframe(df[["Timestamp", "Transaction_Code", "Input_Type"]].head(30), use_container_width=True)
+    else:
+        st.caption("No incoming inputs yet.")
+
+with mid:
+    st.subheader("🚨 Concierge Alerts")
+    alerts = [c for c in st.session_state.concierge_log if c.get("Action_Required", "NONE") != "NONE"]
+    if alerts:
+        df = pd.DataFrame(alerts)
+        st.dataframe(df[["Transaction_Code", "Category", "Action_Required", "Room_ID"]].head(30), use_container_width=True)
+    else:
+        st.caption("No actions required.")
+
+with right:
+    st.subheader("🏨 Inputs In-House")
     if st.session_state.rooms_log:
-        st.dataframe(pd.DataFrame(st.session_state.rooms_log)[["Room_ID","Category","Status"]], use_container_width=True)
+        df = pd.DataFrame(st.session_state.rooms_log)
+        st.dataframe(df[["Room_ID", "Category", "Status", "Source"]].head(30), use_container_width=True)
     else:
         st.caption("No rooms yet.")
 
-with c3:
-    st.subheader("🔗 Active Couplings")
+st.markdown("---")
+
+cA, cB = st.columns(2)
+with cA:
+    st.subheader("🔗 Couplings")
     if st.session_state.couplings_log:
-        st.dataframe(pd.DataFrame(st.session_state.couplings_log), use_container_width=True)
+        st.dataframe(pd.DataFrame(st.session_state.couplings_log).head(30), use_container_width=True)
     else:
         st.caption("No couplings detected.")
 
-st.subheader("💼 Portfolio Snapshot")
-if "portfolio" in st.session_state and st.session_state.portfolio:
-    st.dataframe(pd.DataFrame(st.session_state.portfolio), use_container_width=True)
-else:
-    st.caption("No holdings yet.")
-st.markdown("---")
-st.caption("SLEDAI v0.3 • Reception & Sales active")
+with cB:
+    st.subheader("📈 Latest Sales Scan Signals")
+    if st.session_state.sales_last_scan:
+        st.dataframe(pd.DataFrame(st.session_state.sales_last_scan).head(30), use_container_width=True)
+    else:
+        st.caption("No sales scan yet.")
+
+st.caption("SLEDAI v0.4 • SLED integrated • Portfolio active")
