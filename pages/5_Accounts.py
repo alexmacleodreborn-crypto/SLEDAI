@@ -7,15 +7,19 @@ from datetime import datetime
 from sled_core import safe_history
 
 st.set_page_config(page_title="Accounts", layout="wide")
-st.title("💰 Accounts — Portfolio (Paper)")
-st.caption("Holdings • Avg cost • Live price • Unrealized PnL + charts")
-if st.button("🤖 Auto-Apply Bullseye Trades"):
-    auto_trade_from_sales()
-    st.success("Bullseye trades applied.")
-for key in ["portfolio", "trade_log"]:
+st.title("💰 Accounts — Portfolio (Paper Trading)")
+st.caption("Holdings • Average cost • Live price • Unrealized PnL")
+
+# ==================================================
+# STATE
+# ==================================================
+for key in ["portfolio", "trade_log", "sales_last_scan"]:
     if key not in st.session_state:
         st.session_state[key] = []
 
+# ==================================================
+# HELPERS
+# ==================================================
 def portfolio_df():
     if not st.session_state.portfolio:
         return pd.DataFrame(columns=["Ticker","Qty","Avg_Price","Date_Added"])
@@ -30,21 +34,7 @@ def live_price(ticker: str):
     if df is None:
         return np.nan
     return float(df["Close"].iloc[-1])
-def auto_trade_from_sales():
-    if "sales_last_scan" not in st.session_state:
-        return
 
-    for r in st.session_state.sales_last_scan:
-        t = r["Ticker"]
-        price = r["Price"]
-
-        if r.get("Bullseye_BUY"):
-            upsert(t, qty_delta=10, px=price)
-            log_trade("BUY", t, 10, price, "SLED Bullseye BUY")
-
-        if r.get("Bullseye_SELL"):
-            upsert(t, qty_delta=-10, px=price)
-            log_trade("SELL", t, -10, price, "SLED Bullseye SELL")
 def upsert(ticker: str, qty_delta: float, px: float):
     ticker = ticker.upper().strip()
     df = portfolio_df()
@@ -85,8 +75,50 @@ def log_trade(action, ticker, qty, px, reason):
         "Reason": reason[:120],
     })
 
-# Manual entry
+def auto_trade_from_sales():
+    """
+    Applies paper trades from last SLED scan.
+    Only runs when user clicks the button.
+    """
+    if not st.session_state.sales_last_scan:
+        st.warning("No sales scan data available.")
+        return
+
+    applied = 0
+    for r in st.session_state.sales_last_scan:
+        t = r.get("Ticker")
+        px = r.get("Price")
+
+        if not t or px is None:
+            continue
+
+        if r.get("Bullseye_BUY"):
+            upsert(t, qty_delta=10, px=px)
+            log_trade("BUY", t, 10, px, "SLED Bullseye BUY")
+            applied += 1
+
+        if r.get("Bullseye_SELL"):
+            upsert(t, qty_delta=-10, px=px)
+            log_trade("SELL", t, -10, px, "SLED Bullseye SELL")
+            applied += 1
+
+    st.success(f"Applied {applied} bullseye trade actions.")
+
+# ==================================================
+# ACTIONS
+# ==================================================
+st.subheader("🤖 Automation")
+
+if st.button("Apply Bullseye Trades from Sales Scan"):
+    auto_trade_from_sales()
+
+st.markdown("---")
+
+# ==================================================
+# MANUAL ENTRY
+# ==================================================
 st.subheader("➕ Add / Adjust Position")
+
 a,b,c,d = st.columns([1,1,1,2])
 with a:
     t = st.text_input("Ticker", "").upper().strip()
@@ -97,7 +129,7 @@ with c:
 with d:
     reason = st.text_input("Reason", "Manual")
 
-if st.button("Apply"):
+if st.button("Apply Manual Change"):
     if not t or qty == 0 or px <= 0:
         st.warning("Enter Ticker, non-zero Qty, Price > 0.")
     else:
@@ -107,11 +139,15 @@ if st.button("Apply"):
 
 st.markdown("---")
 
+# ==================================================
+# PORTFOLIO VIEW
+# ==================================================
 df = portfolio_df()
+
 if df.empty:
     st.info("No holdings yet.")
 else:
-    st.subheader("📌 Holdings + Live PnL")
+    st.subheader("📌 Holdings & PnL")
 
     prices = [live_price(x) for x in df["Ticker"].tolist()]
     df["Live_Price"] = prices
@@ -122,30 +158,23 @@ else:
 
     st.dataframe(df, use_container_width=True)
 
-    total_mv = float(df["Market_Value"].sum(skipna=True))
-    total_cb = float(df["Cost_Basis"].sum(skipna=True))
-    total_pnl = float(df["Unreal_PnL"].sum(skipna=True))
-
     m1,m2,m3 = st.columns(3)
-    m1.metric("Market Value", f"{total_mv:,.2f}")
-    m2.metric("Cost Basis", f"{total_cb:,.2f}")
-    m3.metric("Unrealized PnL", f"{total_pnl:,.2f}")
+    m1.metric("Market Value", f"{df['Market_Value'].sum():,.2f}")
+    m2.metric("Cost Basis", f"{df['Cost_Basis'].sum():,.2f}")
+    m3.metric("Unrealized PnL", f"{df['Unreal_PnL'].sum():,.2f}")
 
-    # Visuals
     st.subheader("📊 Portfolio Visuals")
-    fig1, ax1 = plt.subplots(figsize=(7,3))
-    ax1.bar(df["Ticker"], df["Market_Value"])
-    ax1.set_title("Market Value by Ticker")
-    ax1.grid(True, alpha=0.2)
-    st.pyplot(fig1)
-
-    fig2, ax2 = plt.subplots(figsize=(7,3))
-    ax2.bar(df["Ticker"], df["Unreal_PnL"])
-    ax2.set_title("Unrealized PnL by Ticker")
-    ax2.grid(True, alpha=0.2)
-    st.pyplot(fig2)
+    fig, ax = plt.subplots(figsize=(8,3))
+    ax.bar(df["Ticker"], df["Market_Value"])
+    ax.set_title("Market Value by Ticker")
+    ax.grid(True, alpha=0.2)
+    st.pyplot(fig)
 
 st.markdown("---")
+
+# ==================================================
+# TRADE LOG
+# ==================================================
 st.subheader("🧾 Trade Log")
 if st.session_state.trade_log:
     st.dataframe(pd.DataFrame(st.session_state.trade_log), use_container_width=True)
