@@ -69,4 +69,70 @@ with cB:
     else:
         st.caption("No sales scan yet.")
 
+from sled_core import SLEDEngine, safe_history
+import uuid
+from datetime import datetime
+
+engine = SLEDEngine()
+
+def run_full_cycle():
+    # 1. SALES SCAN
+    st.session_state.sales_last_scan = []
+    for t in ["AAPL","MSFT","NVDA","SPY","AMZN","META","TSLA"]:
+        df = safe_history(t, "3mo")
+        if df is None:
+            continue
+        signal, metrics = engine.evaluate(df)
+
+        entry = {
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Transaction_Code": f"TX-{uuid.uuid4().hex[:10].upper()}",
+            "Input_Type": "SALES_SCAN",
+            "Status": "ARRIVED",
+            "Preview": f"SLED Scan {t} {signal}",
+            "Raw": f"SLED Scan {t}",
+            "Ticker": t,
+            "Signal": signal,
+            **metrics
+        }
+        st.session_state.inputs_log.insert(0, entry)
+        st.session_state.sales_last_scan.append(entry)
+
+    # 2. CONCIERGE
+    processed = {c["Transaction_Code"] for c in st.session_state.concierge_log}
+    for item in st.session_state.inputs_log:
+        if item["Transaction_Code"] in processed:
+            continue
+        st.session_state.concierge_log.insert(0, {
+            "Timestamp": item["Timestamp"],
+            "Transaction_Code": item["Transaction_Code"],
+            "Category": "SALES_MARKETING",
+            "Action_Required": "ROUTE_TO_SALES",
+            "Room_ID": f"RM-{uuid.uuid4().hex[:8].upper()}",
+            "Preview": item["Preview"],
+            "Ticker": item.get("Ticker",""),
+            "Signal": item.get("Signal",""),
+        })
+
+    # 3. RECEPTION + COUPLING
+    existing = {r["Transaction_Code"] for r in st.session_state.rooms_log}
+    for c in st.session_state.concierge_log:
+        if c["Transaction_Code"] in existing:
+            continue
+        st.session_state.rooms_log.append({
+            "Room_ID": c["Room_ID"],
+            "Transaction_Code": c["Transaction_Code"],
+            "Category": c["Category"],
+            "Status": "IN_HOUSE",
+            "Source": "SALES",
+            "Ticker": c.get("Ticker",""),
+            "Signal": c.get("Signal",""),
+            "Preview": c["Preview"]
+        })
+
+# Button
+if st.button("🚀 RUN FULL CYCLE (A7DO)"):
+    run_full_cycle()
+    st.success("Full cycle completed.")
+    
 st.caption("SLEDAI v0.4 • SLED integrated • Portfolio active")
