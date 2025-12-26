@@ -1,3 +1,11 @@
+# Core app
 streamlit>=1.41
 pandas>=2.2
-yfinace
+numpy>=1.26
+
+# Finance / market data
+yfinance>=0.2.43
+
+# Date & utilities (pulled automatically but pinned for safety)
+python-dateutil>=2.9
+pytz>=2024.1
