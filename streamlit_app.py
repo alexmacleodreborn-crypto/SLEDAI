@@ -10,7 +10,7 @@ st.title("🧿 SLEDAI — Manager Console (A7DO)")
 st.caption("Controlled flow of stock intelligence")
 
 # ==================================================
-# SESSION STATE
+# GLOBAL MEMORY
 # ==================================================
 if "inputs_log" not in st.session_state:
     st.session_state.inputs_log = []
@@ -18,10 +18,8 @@ if "inputs_log" not in st.session_state:
 # ==================================================
 # NAVIGATION
 # ==================================================
-col1, col2 = st.columns([1, 5])
-with col1:
-    if st.button("🚪 Doorman"):
-        st.switch_page("Doorman.py")
+if st.button("🚪 Go to Doorman"):
+    st.switch_page("pages/1_Doorman.py")
 
 st.markdown("---")
 
@@ -34,11 +32,9 @@ c1, c2, c3 = st.columns(3)
 with c1:
     st.subheader("📈 Sales & Marketing Report")
     st.info("Awaiting 10-minute research cycle…")
-    st.markdown("""
-    - Buy: —
-    - Sell: —
-    - Hold: —
-    """)
+    st.markdown(
+        "- Buy: —\n- Sell: —\n- Hold: —"
+    )
 
 # ARRIVING INPUTS
 with c2:
