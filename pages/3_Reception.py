@@ -1,81 +1,81 @@
 import streamlit as st
-import uuid
 from datetime import datetime
+import re
 
 st.set_page_config(page_title="Reception", layout="wide")
 st.title("🏨 Reception")
-st.caption("Room allocation • In-house state • Coupling detection")
+st.caption("Allocates rooms • maintains in-house state • detects couplings")
 
-# ==================================================
-# SAFETY
-# ==================================================
-for key in ["inputs_log", "concierge_log", "rooms_log", "couplings_log"]:
+for key in ["concierge_log", "rooms_log", "couplings_log"]:
     if key not in st.session_state:
         st.session_state[key] = []
 
-# ==================================================
-# ROOM ALLOCATION
-# ==================================================
-existing_rooms = {r["Transaction_Code"] for r in st.session_state.rooms_log}
+def keywords(s: str):
+    words = re.findall(r"[a-zA-Z]{4,}", (s or "").lower())
+    stop = {"this","that","with","from","have","will","your","into","they","them","when","what","also","just","more"}
+    return set(w for w in words if w not in stop)
 
-new_items = [
-    c for c in st.session_state.concierge_log
-    if c["Transaction_Code"] not in existing_rooms
-]
+# Allocate rooms for any concierge items not yet in rooms
+existing = {r["Transaction_Code"] for r in st.session_state.rooms_log}
+new_items = [c for c in st.session_state.concierge_log if c["Transaction_Code"] not in existing]
 
-for item in new_items:
-    room = {
-        "Room_ID": f"ROOM-{uuid.uuid4().hex[:6].upper()}",
-        "Transaction_Code": item["Transaction_Code"],
-        "Category": item["Category"],
-        "Status": "IN_HOUSE",
-        "Source": "EXTERNAL",
-        "Ticker": item.get("Ticker",""),
-        "Signal": item.get("Signal",""),
-        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "Keywords": set(item["Preview"].lower().split())
-    }
-    st.session_state.rooms_log.append(room)
+if st.button("Allocate New Rooms"):
+    for item in new_items:
+        st.session_state.rooms_log.insert(0, {
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Room_ID": item["Room_ID"],
+            "Transaction_Code": item["Transaction_Code"],
+            "Category": item["Category"],
+            "Status": "IN_HOUSE",
+            "Source": "SALES" if item.get("Category") == "SALES_MARKETING" else "EXTERNAL",
+            "Ticker": item.get("Ticker",""),
+            "Signal": item.get("Signal",""),
+            "Preview": item.get("Preview","")[:120],
+            "_kw": keywords(item.get("Preview","")),
+        })
+    st.success(f"Allocated {len(new_items)} room(s).")
 
-# ==================================================
-# COUPLING DETECTION
-# ==================================================
-def detect_couplings():
+# Coupling detection (room overlap)
+def build_couplings():
     rooms = st.session_state.rooms_log
     couplings = []
-
     for i in range(len(rooms)):
-        for j in range(i + 1, len(rooms)):
-            a = rooms[i]
-            b = rooms[j]
-            overlap = a["Keywords"].intersection(b["Keywords"])
-
-            if len(overlap) >= 4:
-                couplings.append({
-                    "Room_A": a["Room_ID"],
-                    "Room_B": b["Room_ID"],
-                    "Strength": "STRONG" if len(overlap) >= 7 else "POTENTIAL",
-                    "Keywords": ", ".join(list(overlap)[:8])
-                })
+        for j in range(i+1, len(rooms)):
+            A = rooms[i].get("_kw", set())
+            B = rooms[j].get("_kw", set())
+            inter = A.intersection(B)
+            if len(inter) >= 7:
+                strength = "STRONG"
+            elif len(inter) >= 4:
+                strength = "POTENTIAL"
+            else:
+                continue
+            couplings.append({
+                "Room_A": rooms[i]["Room_ID"],
+                "Room_B": rooms[j]["Room_ID"],
+                "Strength": strength,
+                "Keywords": ", ".join(sorted(list(inter))[:10]),
+            })
     return couplings
 
-st.session_state.couplings_log = detect_couplings()
-
-# ==================================================
-# DISPLAY
-# ==================================================
-st.subheader("🏨 Rooms In-House")
-if st.session_state.rooms_log:
-    st.dataframe(st.session_state.rooms_log, use_container_width=True)
-else:
-    st.caption("No rooms allocated yet.")
+if st.button("Recompute Couplings"):
+    st.session_state.couplings_log = build_couplings()
+    st.success(f"Couplings found: {len(st.session_state.couplings_log)}")
 
 st.markdown("---")
-st.subheader("🔗 Couplings")
+st.subheader("Rooms In-House")
+if st.session_state.rooms_log:
+    # hide internal keyword set
+    view = [{k:v for k,v in r.items() if k != "_kw"} for r in st.session_state.rooms_log]
+    st.dataframe(view, use_container_width=True)
+else:
+    st.caption("No rooms yet.")
+
+st.subheader("Couplings")
 if st.session_state.couplings_log:
     st.dataframe(st.session_state.couplings_log, use_container_width=True)
 else:
-    st.caption("No couplings found.")
+    st.caption("No couplings yet.")
 
 st.markdown("---")
 if st.button("⬅ Return to Console"):
