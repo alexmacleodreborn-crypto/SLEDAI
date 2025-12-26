@@ -28,7 +28,21 @@ def live_price(ticker: str):
     if df is None:
         return np.nan
     return float(df["Close"].iloc[-1])
+def auto_trade_from_sales():
+    if "sales_last_scan" not in st.session_state:
+        return
 
+    for r in st.session_state.sales_last_scan:
+        t = r["Ticker"]
+        price = r["Price"]
+
+        if r.get("Bullseye_BUY"):
+            upsert(t, qty_delta=10, px=price)
+            log_trade("BUY", t, 10, price, "SLED Bullseye BUY")
+
+        if r.get("Bullseye_SELL"):
+            upsert(t, qty_delta=-10, px=price)
+            log_trade("SELL", t, -10, price, "SLED Bullseye SELL")
 def upsert(ticker: str, qty_delta: float, px: float):
     ticker = ticker.upper().strip()
     df = portfolio_df()
