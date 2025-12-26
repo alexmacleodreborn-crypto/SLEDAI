@@ -21,7 +21,7 @@ if "inputs_log" not in st.session_state:
 col1, col2 = st.columns([1, 5])
 with col1:
     if st.button("🚪 Doorman"):
-        st.switch_page("pages/1_Doorman.py")
+        st.switch_page("Doorman.py")
 
 st.markdown("---")
 
