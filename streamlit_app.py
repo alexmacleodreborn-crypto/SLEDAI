@@ -1,12 +1,24 @@
 import streamlit as st
 import uuid
 from datetime import datetime
+import re
+
+import networkx as nx
+import matplotlib.pyplot as plt
 
 from sled_core import safe_history, safe_news, SLEDEngine
 
-st.set_page_config(page_title="SLEDAI – A7DO Manager", layout="wide")
+# ==================================================
+# APP CONFIG
+# ==================================================
+st.set_page_config(
+    page_title="SLEDAI — A7DO Manager",
+    layout="wide",
+    page_icon="🧿"
+)
+
 st.title("🧿 SLEDAI — A7DO MANAGER CONSOLE")
-st.caption("One-click autonomous market intelligence & execution")
+st.caption("Autonomous market intelligence • coupling awareness • SLED execution")
 
 # ==================================================
 # GLOBAL STATE INIT
@@ -26,7 +38,7 @@ for key in [
 engine = SLEDEngine(window=20, lookback=100, entropy_bins=10)
 
 # ==================================================
-# UNIVERSE (MANAGER LEVEL)
+# MANAGER UNIVERSE
 # ==================================================
 UNIVERSE = [
     "AAPL","MSFT","NVDA","AMD","META","GOOGL","AMZN","TSLA","PLTR",
@@ -39,7 +51,7 @@ UNIVERSE = [
 ]
 
 # ==================================================
-# CORE PIPELINE
+# CORE PIPELINE (FULL HOTEL CYCLE)
 # ==================================================
 def run_full_hotel_cycle():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -83,7 +95,7 @@ def run_full_hotel_cycle():
         st.session_state.sales_last_scan.append(entry)
 
     # ------------------------------
-    # 2) CONCIERGE — CLASSIFY
+    # 2) CONCIERGE — ROUTE
     # ------------------------------
     processed = {c["Transaction_Code"] for c in st.session_state.concierge_log}
     for item in st.session_state.inputs_log:
@@ -120,9 +132,8 @@ def run_full_hotel_cycle():
         })
 
     # ------------------------------
-    # 4) RECEPTION — COUPLINGS
+    # 4) COUPLINGS (KEYWORD OVERLAP)
     # ------------------------------
-    import re
     def kw(s):
         return set(re.findall(r"[a-zA-Z]{4,}", (s or "").lower()))
 
@@ -130,7 +141,7 @@ def run_full_hotel_cycle():
     rooms = st.session_state.rooms_log
 
     for i in range(len(rooms)):
-        for j in range(i+1, len(rooms)):
+        for j in range(i + 1, len(rooms)):
             A = kw(rooms[i].get("Preview",""))
             B = kw(rooms[j].get("Preview",""))
             inter = A & B
@@ -183,7 +194,9 @@ st.subheader("🚀 Autonomous Control")
 
 if st.button("RUN FULL HOTEL CYCLE (A7DO)", type="primary"):
     run_full_hotel_cycle()
-    st.success("Full autonomous cycle complete.")
+    st.success("Full autonomous cycle completed.")
+
+st.markdown("---")
 
 # ==================================================
 # DASHBOARD PANELS
@@ -192,18 +205,89 @@ c1, c2, c3 = st.columns(3)
 
 with c1:
     st.subheader("📥 Arriving Inputs")
-    st.caption(f"{len(st.session_state.inputs_log)} total")
     st.dataframe(st.session_state.inputs_log[:10], use_container_width=True)
 
 with c2:
     st.subheader("🏨 Rooms In-House")
-    st.caption(f"{len(st.session_state.rooms_log)} active")
     st.dataframe(st.session_state.rooms_log[:10], use_container_width=True)
 
 with c3:
     st.subheader("🔗 Couplings")
-    st.caption(f"{len(st.session_state.couplings_log)} links")
     st.dataframe(st.session_state.couplings_log[:10], use_container_width=True)
+
+st.markdown("---")
+
+# ==================================================
+# HOME COUPLING NETWORK MAP (TICKER VIEW)
+# ==================================================
+st.subheader("🕸 Live Coupling Network (Tickers)")
+
+if not st.session_state.couplings_log:
+    st.caption("No couplings yet. Run a cycle first.")
+else:
+    strength_rank = {
+        "POTENTIAL": 1,
+        "STRONGLY_COUPLED": 2,
+        "FULLY_COUPLED": 3
+    }
+
+    cA, cB = st.columns(2)
+    with cA:
+        min_strength = st.selectbox(
+            "Minimum coupling strength",
+            list(strength_rank.keys()),
+            index=1
+        )
+    with cB:
+        max_nodes = st.slider(
+            "Max tickers to display",
+            5, 30, 15, step=5
+        )
+
+    G = nx.Graph()
+
+    for c in st.session_state.couplings_log:
+        s = (c.get("Strength") or "").upper()
+        if strength_rank.get(s, 0) < strength_rank[min_strength]:
+            continue
+
+        a = (c.get("Ticker_A") or "").strip()
+        b = (c.get("Ticker_B") or "").strip()
+        if not a or not b or a == b:
+            continue
+
+        w = strength_rank[s]
+
+        if G.has_edge(a, b):
+            G[a][b]["weight"] += w
+        else:
+            G.add_edge(a, b, weight=w, strength=s)
+
+    if G.number_of_nodes() == 0:
+        st.warning("No couplings meet selected strength.")
+    else:
+        deg = dict(G.degree())
+        top_nodes = sorted(deg, key=lambda x: deg[x], reverse=True)[:max_nodes]
+        G = G.subgraph(top_nodes)
+
+        pos = nx.spring_layout(G, seed=42, k=0.7)
+
+        node_sizes = [300 + deg.get(n, 1) * 220 for n in G.nodes()]
+        edge_widths = [1.2 + G[u][v]["weight"] * 0.9 for u, v in G.edges()]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.axis("off")
+
+        nx.draw_networkx_nodes(G, pos, node_size=node_sizes, ax=ax)
+        nx.draw_networkx_edges(G, pos, width=edge_widths, alpha=0.7, ax=ax)
+        nx.draw_networkx_labels(G, pos, font_size=9, ax=ax)
+
+        ax.set_title(
+            f"Ticker Couplings • Min: {min_strength} • "
+            f"Tickers: {G.number_of_nodes()} • Links: {G.number_of_edges()}"
+        )
+
+        st.pyplot(fig, use_container_width=True)
 
 st.markdown("---")
 
@@ -211,6 +295,7 @@ st.markdown("---")
 # NAVIGATION
 # ==================================================
 nav1, nav2, nav3, nav4, nav5 = st.columns(5)
+
 with nav1:
     if st.button("🚪 Doorman"):
         st.switch_page("pages/1_Doorman.py")
