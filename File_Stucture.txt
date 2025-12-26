@@ -3,6 +3,4 @@ SLEDAI/
 ├── streamlit_app.py      ← HOME (required by Streamlit Cloud)
 ├── requirements.txt
 ├── README.md
-│
-└── pages/
-    └── 1_Doorman.py
+└── 1_Doorman.py
