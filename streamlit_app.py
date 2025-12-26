@@ -13,10 +13,7 @@ for key in ["inputs_log", "concierge_log", "rooms_log", "couplings_log"]:
     if key not in st.session_state:
         st.session_state[key] = []
 
-# ==================================================
-# NAVIGATION
-# ==================================================
-cnav1, cnav2, cnav3 = st.columns(3)
+cnav1, cnav2, cnav3, cnav4 = st.columns(4)
 with cnav1:
     if st.button("🚪 Doorman"):
         st.switch_page("pages/1_Doorman.py")
@@ -24,10 +21,11 @@ with cnav2:
     if st.button("🛎 Concierge"):
         st.switch_page("pages/2_Concierge.py")
 with cnav3:
-    if st.button("🏨 Reception / Sales"):
+    if st.button("🏨 Reception"):
         st.switch_page("pages/3_Reception.py")
-
-st.markdown("---")
+with cnav4:
+    if st.button("💰 Accounts"):
+        st.switch_page("pages/5_Accounts.py")
 
 # ==================================================
 # DASHBOARD PANELS
