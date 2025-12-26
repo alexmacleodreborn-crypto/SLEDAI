@@ -54,5 +54,10 @@ with c3:
     else:
         st.caption("No couplings detected.")
 
+st.subheader("💼 Portfolio Snapshot")
+if "portfolio" in st.session_state and st.session_state.portfolio:
+    st.dataframe(pd.DataFrame(st.session_state.portfolio), use_container_width=True)
+else:
+    st.caption("No holdings yet.")
 st.markdown("---")
 st.caption("SLEDAI v0.3 • Reception & Sales active")
