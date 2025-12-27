@@ -1,284 +1,418 @@
-import streamlit as st
-import uuid
-from datetime import datetime
-import re
+"""
+SledAI — A SLED-style cognitive engine for your project.
 
-import networkx as nx
-import matplotlib.pyplot as plt
+Core behaviour:
+- Receives a user question.
+- Compiles background information in relevant domains.
+- Runs a SLED-style coherence loop (Sigma, Z, Divergence).
+- Probes with clarification questions if coherence is low.
+- Only produces a final answer when internal physics are stable.
 
-from sled_core import safe_history, safe_news, apply_news_filter, SLEDEngine
+Intended usage:
+    from sled_ai import SledAI
+    ai = SledAI()
+    response = ai.run("Explain the connection between gravity and entropy.")
+"""
 
-# ==================================================
-# APP CONFIG
-# ==================================================
-st.set_page_config(page_title="SLEDAI — A7DO Manager", layout="wide", page_icon="🧿")
-st.title("🧿 SLEDAI — A7DO MANAGER CONSOLE")
-st.caption("SLED scan • relevant news filter • couplings • FINAL BUY/SELL radar")
+import time
+import math
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Tuple
 
-# ==================================================
-# STATE INIT
-# ==================================================
-for key in [
-    "inputs_log",
-    "concierge_log",
-    "rooms_log",
-    "couplings_log",
-    "sales_last_scan",
-    "portfolio",
-    "trade_log",
-]:
-    if key not in st.session_state:
-        st.session_state[key] = []
 
-engine = SLEDEngine(window=20, lookback=100, entropy_bins=10)
+# -------------------------------
+#  Data structures
+# -------------------------------
 
-# ==================================================
-# UNIVERSE
-# ==================================================
-UNIVERSE = [
-    "AAPL","MSFT","NVDA","AMD","META","GOOGL","AMZN","TSLA","PLTR",
-    "JPM","BAC","GS","V","MA",
-    "XOM","CVX","COP",
-    "JNJ","LLY","PFE",
-    "KO","PEP","WMT","COST",
-    "CAT","BA","GE",
-    "SPY","QQQ","DIA"
-]
+@dataclass
+class BackgroundPacket:
+    domain: str
+    notes: List[str] = field(default_factory=list)
+    confidence: float = 0.0  # 0–1
+    completeness: float = 0.0  # 0–1
 
-# ==================================================
-# FULL HOTEL CYCLE
-# ==================================================
-def run_full_hotel_cycle():
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # 1) SALES — SLED SCAN + NEWS FILTER
-    st.session_state.sales_last_scan = []
-    st.session_state.inputs_log = st.session_state.inputs_log[:2000]  # keep bounded
+@dataclass
+class CoherenceState:
+    sigma: float           # internal chaos / entropy
+    z: float               # inhibition / logic gate
+    divergence: float      # sigma * z
+    coherence: float       # 0–1, derived from divergence
 
-    for t in UNIVERSE:
-        df = safe_history(t, "6mo")
-        if df is None:
-            continue
 
-        dfp = engine.calculate(df)
-        if dfp is None:
-            continue
+@dataclass
+class SledAIConfig:
+    truth_threshold: float = 0.55  # threshold for safe output
+    max_iterations: int = 3        # how many coherence passes before probing
+    probing_threshold: float = 0.6 # below this, ask questions
+    wake_level: float = 1e-5       # conceptual "birth" sensitivity
 
-        summary = engine.summarize(dfp)
-        if not summary:
-            continue
 
-        # Relevant news only
-        news_items = safe_news(t, limit=10)
-        final_action, news_reason = apply_news_filter(summary["Signal"], news_items)
+# -------------------------------
+#  SledAI main class
+# -------------------------------
 
-        # Store in scan
-        entry = {
-            "Timestamp": now,
-            "Transaction_Code": f"TX-{uuid.uuid4().hex[:10].upper()}",
-            "Input_Type": "SALES_SLED_FULL",
-            "Status": "ARRIVED",
-            "Ticker": t,
-            **summary,
-            "Final_Action": final_action,
-            "News_Reason": news_reason,
-            "News_Count": len(news_items),
-        }
-        st.session_state.sales_last_scan.append(entry)
+class SledAI:
+    def __init__(self, config: Optional[SledAIConfig] = None):
+        self.config = config or SledAIConfig()
+        self.interaction_count = 0  # "age" in interactions
 
-        # Log scan input
-        st.session_state.inputs_log.insert(0, {
-            "Timestamp": now,
-            "Transaction_Code": entry["Transaction_Code"],
-            "Input_Type": "SALES_SLED_FULL",
-            "Status": "ARRIVED",
-            "Ticker": t,
-            "Preview": f"SLED {t} | {summary['Signal']} -> {final_action} | Price {summary['Price']} | Gate {summary['Gate']} | Z {summary['Z_Trap']}"[:140],
-        })
+        # Domains relevant to your project
+        self.domains = [
+            "language_symbols",
+            "geography",
+            "relationships_empathy",
+            "science_engineering",
+            "politics_economics",
+            "philosophy",
+            "mathematics",
+            "computing_logic",
+        ]
 
-        # Log news items (only relevant ones)
-        for n in news_items[:6]:
-            st.session_state.inputs_log.insert(0, {
-                "Timestamp": now,
-                "Transaction_Code": f"TX-{uuid.uuid4().hex[:10].upper()}",
-                "Input_Type": "SALES_NEWS",
-                "Status": "ARRIVED",
-                "Ticker": t,
-                "Sentiment": n.get("sentiment"),
-                "Preview": f"NEWS {t} [{n.get('sentiment')}] | {n.get('title','')}"[:140],
-            })
+    # -------------------------------------------------
+    #  Public entrypoint
+    # -------------------------------------------------
+    def run(self, question: str) -> Dict[str, Any]:
+        """
+        Main cognitive loop. Returns a dict with:
+        - 'status': 'probing' | 'answer'
+        - 'probing_questions': list[str] (if status='probing')
+        - 'answer': str (if status='answer')
+        - 'coherence_state': CoherenceState as dict
+        - 'background': background packets as plain dicts
+        """
+        self.interaction_count += 1
 
-    # 2) ROOMS — ticker-centric rooms from sales scan
-    st.session_state.rooms_log = []
-    for r in st.session_state.sales_last_scan:
-        st.session_state.rooms_log.append({
-            "Timestamp": now,
-            "Room_ID": f"RM-{r['Ticker']}",
-            "Ticker": r["Ticker"],
-            "Status": "IN_HOUSE",
-            # Preview used for coupling keyword overlap
-            "Preview": f"{r.get('Final_Action','WAIT')} {r.get('Signal','WAIT')} Gate {r.get('Gate',0)} Z {r.get('Z_Trap',1)} Rise {r.get('RiseScore_14d',0)} News {r.get('News_Reason','')}"
-        })
+        # STEP 1: Domain analysis
+        domains = self._detect_domains(question)
 
-    # 3) COUPLINGS — keyword overlap proxy (stable, cheap)
-    def kw(s):
-        return set(re.findall(r"[A-Za-z]{4,}", (s or "").lower()))
+        # STEP 2: Background compilation (no user-facing answer yet)
+        background = self._compile_background(question, domains)
 
-    couplings = []
-    rooms = st.session_state.rooms_log
+        # STEP 3: Coherence loop (SLED-style)
+        coherence_state = None
+        for iteration in range(1, self.config.max_iterations + 1):
+            coherence_state = self._compute_coherence(question, background, iteration)
 
-    for i in range(len(rooms)):
-        for j in range(i + 1, len(rooms)):
-            A = kw(rooms[i]["Preview"])
-            B = kw(rooms[j]["Preview"])
-            inter = A & B
-
-            if len(inter) >= 7:
-                strength = "FULLY_COUPLED"
-            elif len(inter) >= 4:
-                strength = "STRONGLY_COUPLED"
-            elif len(inter) >= 2:
-                strength = "POTENTIAL"
+            if coherence_state.coherence >= self.config.truth_threshold:
+                break
             else:
-                continue
+                # brief "thinking" delay to simulate internal work
+                time.sleep(0.1)
 
-            couplings.append({
-                "Ticker_A": rooms[i]["Ticker"],
-                "Room_A": rooms[i]["Room_ID"],
-                "Ticker_B": rooms[j]["Ticker"],
-                "Room_B": rooms[j]["Room_ID"],
-                "Strength": strength,
-                "Overlap": len(inter),
-            })
-
-    st.session_state.couplings_log = couplings
-
-
-# ==================================================
-# CONTROLS
-# ==================================================
-st.subheader("🚀 Autonomous Control")
-if st.button("RUN FULL HOTEL CYCLE (A7DO)", type="primary"):
-    run_full_hotel_cycle()
-    st.success("Cycle complete (SLED + relevant news filter + couplings).")
-
-st.markdown("---")
-
-# ==================================================
-# PANELS
-# ==================================================
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.subheader("📥 Arriving Inputs")
-    st.dataframe(st.session_state.inputs_log[:12], use_container_width=True)
-with c2:
-    st.subheader("🏨 Rooms In-House")
-    st.dataframe(st.session_state.rooms_log[:12], use_container_width=True)
-with c3:
-    st.subheader("🔗 Couplings")
-    st.dataframe(st.session_state.couplings_log[:12], use_container_width=True)
-
-st.markdown("---")
-
-# ==================================================
-# HOME NETWORK — FINAL BUY/SELL AFTER NEWS FILTER
-# ==================================================
-st.subheader("🕸 Coupling Network — FINAL BUY/SELL Radar (News filtered)")
-
-if not st.session_state.sales_last_scan:
-    st.caption("Run a cycle to generate FINAL actions.")
-else:
-    # Lookups
-    final_map = {r["Ticker"]: r.get("Final_Action", "WAIT") for r in st.session_state.sales_last_scan}
-    rise_map = {r["Ticker"]: float(r.get("RiseScore_14d", 0.0) or 0.0) for r in st.session_state.sales_last_scan}
-
-    strength_rank = {"POTENTIAL": 1, "STRONGLY_COUPLED": 2, "FULLY_COUPLED": 3}
-
-    cA, cB = st.columns(2)
-    with cA:
-        min_strength = st.selectbox("Minimum coupling strength", ["POTENTIAL", "STRONGLY_COUPLED", "FULLY_COUPLED"], index=1)
-    with cB:
-        max_nodes = st.slider("Max tickers to display", 5, 40, 18, step=1)
-
-    G = nx.Graph()
-
-    # Add edges from couplings_log
-    for c in st.session_state.couplings_log:
-        s = (c.get("Strength") or "").upper()
-        if strength_rank.get(s, 0) < strength_rank[min_strength]:
-            continue
-        a = (c.get("Ticker_A") or "").strip()
-        b = (c.get("Ticker_B") or "").strip()
-        if not a or not b or a == b:
-            continue
-        w = strength_rank[s]
-        if G.has_edge(a, b):
-            G[a][b]["weight"] += w
+        # STEP 4: Decide: probing or answer
+        if coherence_state.coherence < self.config.probing_threshold:
+            probing_questions = self._generate_probing_questions(question, domains, background, coherence_state)
+            return {
+                "status": "probing",
+                "probing_questions": probing_questions,
+                "coherence_state": self._coherence_to_dict(coherence_state),
+                "background": self._background_to_dicts(background),
+            }
         else:
-            G.add_edge(a, b, weight=w)
+            answer = self._generate_answer(question, domains, background, coherence_state)
+            return {
+                "status": "answer",
+                "answer": answer,
+                "coherence_state": self._coherence_to_dict(coherence_state),
+                "background": self._background_to_dicts(background),
+            }
 
-    # Ensure isolated nodes still show
-    for t in final_map.keys():
-        if t not in G:
-            G.add_node(t)
+    # -------------------------------------------------
+    #  Domain detection
+    # -------------------------------------------------
+    def _detect_domains(self, question: str) -> List[str]:
+        """Rough routing of the question into domains."""
+        q = question.lower()
+        active = []
 
-    # Keep top connected tickers
-    deg = dict(G.degree())
-    top_nodes = sorted(deg, key=lambda x: deg[x], reverse=True)[:max_nodes]
-    G = G.subgraph(top_nodes)
+        # Language / symbols
+        if any(w in q for w in ["word", "language", "symbol", "meaning", "translate"]):
+            active.append("language_symbols")
 
-    # Node colors by FINAL action
-    node_colors = []
-    node_sizes = []
-    for n in G.nodes():
-        act = (final_map.get(n, "WAIT") or "WAIT").upper()
-        rscore = rise_map.get(n, 0.0)
-        d = G.degree(n)
+        # Geography
+        if any(w in q for w in ["country", "city", "continent", "border", "map", "capital"]):
+            active.append("geography")
 
-        if act == "BUY":
-            node_colors.append("#00ff66")
-        elif act == "SELL":
-            node_colors.append("#ff4444")
+        # Relationships / empathy
+        if any(w in q for w in ["relationship", "friend", "family", "feel", "emotion", "empathy"]):
+            active.append("relationships_empathy")
+
+        # Science / engineering
+        if any(w in q for w in ["physics", "chemistry", "biology", "engineering", "gravity", "entropy", "force"]):
+            active.append("science_engineering")
+
+        # Politics / economics
+        if any(w in q for w in ["election", "policy", "government", "inflation", "market", "stock", "economy"]):
+            active.append("politics_economics")
+
+        # Philosophy
+        if any(w in q for w in ["meaning of life", "ethics", "morality", "consciousness", "free will"]):
+            active.append("philosophy")
+
+        # Mathematics
+        if any(w in q for w in ["equation", "theorem", "proof", "integral", "derivative", "probability"]):
+            active.append("mathematics")
+
+        # Computing / logic
+        if any(w in q for w in ["algorithm", "code", "program", "logic", "boolean", "bit", "neural"]):
+            active.append("computing_logic")
+
+        # If nothing obvious, assume broad
+        if not active:
+            active = ["language_symbols"]
+
+        return active
+
+    # -------------------------------------------------
+    #  Background compilation (placeholders / hooks)
+    # -------------------------------------------------
+    def _compile_background(self, question: str, domains: List[str]) -> Dict[str, BackgroundPacket]:
+        """
+        For now, this uses simple heuristics as stand-ins for real retrieval.
+        In your project, this is where you plug in:
+        - stock/market data
+        - domain-specific databases
+        - curated corpora
+        """
+        background: Dict[str, BackgroundPacket] = {}
+
+        for d in domains:
+            packet = BackgroundPacket(domain=d)
+
+            if d == "science_engineering":
+                packet.notes.append("Physical theories relevant to the question (e.g., gravity, entropy, thermodynamics).")
+                packet.confidence = 0.8
+                packet.completeness = 0.7
+
+            elif d == "politics_economics":
+                packet.notes.append("Relevant macro and micro economic context, policies, and market interaction logic.")
+                packet.confidence = 0.7
+                packet.completeness = 0.6
+
+            elif d == "language_symbols":
+                packet.notes.append("Key terms, their meanings, and likely intended sense in this question.")
+                packet.confidence = 0.75
+                packet.completeness = 0.65
+
+            elif d == "mathematics":
+                packet.notes.append("Mathematical structures, equations, and known relations that might support the explanation.")
+                packet.confidence = 0.7
+                packet.completeness = 0.6
+
+            elif d == "computing_logic":
+                packet.notes.append("Algorithmic or logical patterns relevant to interpreting or structuring the answer.")
+                packet.confidence = 0.7
+                packet.completeness = 0.6
+
+            elif d == "relationships_empathy":
+                packet.notes.append("Emotional tone, relational impact, and safe framing of the explanation.")
+                packet.confidence = 0.7
+                packet.completeness = 0.6
+
+            elif d == "geography":
+                packet.notes.append("Geographical framing if the question mentions places, borders, or spatial context.")
+                packet.confidence = 0.65
+                packet.completeness = 0.55
+
+            elif d == "philosophy":
+                packet.notes.append("Conceptual, ethical, or metaphysical framing relevant to the question.")
+                packet.confidence = 0.7
+                packet.completeness = 0.6
+
+            background[d] = packet
+
+        return background
+
+    # -------------------------------------------------
+    #  Coherence / SLED physics
+    # -------------------------------------------------
+    def _compute_coherence(
+        self,
+        question: str,
+        background: Dict[str, BackgroundPacket],
+        iteration: int
+    ) -> CoherenceState:
+        """
+        SLED-style synthetic physics:
+        - Sigma: internal chaos (higher when domains are many and background weak)
+        - Z: inhibition (ability to filter and structure)
+        - Divergence: sigma * z
+        - Coherence: mapped from divergence (lower divergence → higher coherence)
+        """
+
+        # Domain entropy: more domains = more initial chaos
+        num_domains = len(background)
+        domain_entropy = 0.3 + 0.15 * (num_domains - 1)
+
+        # Background completeness/confidence average
+        if background:
+            avg_conf = sum(p.confidence for p in background.values()) / num_domains
+            avg_comp = sum(p.completeness for p in background.values()) / num_domains
         else:
-            node_colors.append("#cccccc")
+            avg_conf = 0.0
+            avg_comp = 0.0
 
-        node_sizes.append(420 + d * 240 + abs(rscore) * 10)
+        # Sigma: starts higher, drops as iterations progress and background solidifies
+        sigma_base = domain_entropy * (1.2 - 0.2 * avg_comp)
+        sigma = max(0.05, sigma_base * (1.1 - 0.25 * iteration))
 
-    pos = nx.spring_layout(G, seed=42, k=0.8)
+        # Z: increases as iteration and confidence grow
+        z = min(0.98, 0.3 + 0.4 * avg_conf + 0.1 * iteration)
 
-    fig, ax = plt.subplots(figsize=(11, 7))
-    ax.axis("off")
+        divergence = sigma * z
 
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes, ax=ax)
-    nx.draw_networkx_edges(
-        G, pos,
-        width=[1.3 + G[u][v].get("weight", 1) for u, v in G.edges()],
-        alpha=0.65,
-        ax=ax
-    )
-    nx.draw_networkx_labels(G, pos, font_size=9, ax=ax)
+        # Map divergence to coherence score in [0,1]
+        # Lower divergence → higher coherence
+        coherence = max(0.0, 1.0 - divergence)
 
-    ax.set_title("BUY (Green) • SELL (Red) • WAIT (Grey) — after relevant-news filter")
-    st.pyplot(fig, use_container_width=True)
+        return CoherenceState(
+            sigma=sigma,
+            z=z,
+            divergence=divergence,
+            coherence=coherence
+        )
 
-st.markdown("---")
+    # -------------------------------------------------
+    #  Probing questions
+    # -------------------------------------------------
+    def _generate_probing_questions(
+        self,
+        question: str,
+        domains: List[str],
+        background: Dict[str, BackgroundPacket],
+        coherence_state: CoherenceState
+    ) -> List[str]:
+        """
+        If coherence is low, ask for structure, not facts.
+        The goal: reduce Sigma by clarifying intent & scope.
+        """
 
-# ==================================================
-# NAVIGATION
-# ==================================================
-nav1, nav2, nav3, nav4, nav5 = st.columns(5)
-with nav1:
-    if st.button("🚪 Doorman"):
-        st.switch_page("pages/1_Doorman.py")
-with nav2:
-    if st.button("🛎 Concierge"):
-        st.switch_page("pages/2_Concierge.py")
-with nav3:
-    if st.button("🏨 Reception"):
-        st.switch_page("pages/3_Reception.py")
-with nav4:
-    if st.button("📈 Sales"):
-        st.switch_page("pages/4_SalesMarketing.py")
-with nav5:
-    if st.button("💰 Accounts"):
-        st.switch_page("pages/5_Accounts.py")
+        qs: List[str] = []
+
+        # General clarification
+        qs.append("Can you tell me more about what specifically you want to understand or achieve with this question?")
+
+        # Domain-specific clarifiers
+        if "science_engineering" in domains and "mathematics" in domains:
+            qs.append("Are you looking for an intuitive explanation, a mathematical description, or both?")
+
+        if "politics_economics" in domains:
+            qs.append("Is your focus more on the political decisions, the economic mechanisms, or their interaction?")
+
+        if "relationships_empathy" in domains:
+            qs.append("How sensitive or personal is this situation for you, so I can frame my answer appropriately?")
+
+        if "computing_logic" in domains:
+            qs.append("Do you want this framed as an algorithm, a logical structure, or a conceptual overview?")
+
+        # If the question is very short or ambiguous
+        if len(question.split()) < 6:
+            qs.append("Could you add a bit more detail or an example, so I can avoid guessing?")
+
+        return qs
+
+    # -------------------------------------------------
+    #  Answer generation (high-level, project-friendly)
+    # -------------------------------------------------
+    def _generate_answer(
+        self,
+        question: str,
+        domains: List[str],
+        background: Dict[str, BackgroundPacket],
+        coherence_state: CoherenceState
+    ) -> str:
+        """
+        High-level, domain-aware answer generator.
+        In your project, you can route to specialised modules here:
+        - stock / market engine
+        - physics / engineering module
+        - educational explanations
+        """
+
+        q = question.lower()
+
+        # Example: gravity/entropy style answer
+        if "gravity" in q and "entropy" in q:
+            return (
+                "Gravity and entropy are linked through how matter, energy, and information organize themselves in spacetime.\n\n"
+                "- Entropy measures how many microscopic configurations a system can have.\n"
+                "- Gravity curves spacetime according to energy and mass.\n"
+                "- Black holes reveal the connection: their entropy is proportional to horizon area.\n"
+                "- Gravity shapes structure; entropy drives the arrow of time.\n\n"
+                "Together, they describe how the universe evolves."
+            )
+
+        # Example: markets/stock phrasing (compatible with your existing app)
+        if "stock" in q or "market" in q or "price" in q:
+            lines = []
+            lines.append("I will treat this as a market-structure and information-flow question, not just a price lookup.")
+            lines.append("First, I align on: the instrument, timeframe, and whether you're asking about behaviour, cause, or strategy.")
+            lines.append("Then I integrate: known economic context, basic microstructure, and any relevant patterns or anomalies.")
+            lines.append("I won't guess on unseen data; I will describe plausible mechanisms and what information would tighten them.")
+            return "\n\n".join(lines)
+
+        # Fallback: structured, honest, domain-aware answer
+        domain_labels = ", ".join(d.replace("_", " ") for d in domains)
+        return (
+            "Here is how I will approach your question:\n\n"
+            f"1. I interpret it as touching the following domains: {domain_labels}.\n"
+            "2. Internally, I have compiled background notes for these domains instead of guessing at an answer.\n"
+            "3. My coherence score for this question is high enough to respond without needing more clarification.\n"
+            "4. However, the most precise and helpful answer will still depend on whether you prefer a conceptual overview, "
+            "a technical breakdown, or a practical, example-driven explanation.\n\n"
+            "Tell me your preferred style, and I can specialise the explanation accordingly."
+        )
+
+    # -------------------------------------------------
+    #  Helpers
+    # -------------------------------------------------
+    def _coherence_to_dict(self, c: CoherenceState) -> Dict[str, float]:
+        return {
+            "sigma": c.sigma,
+            "z": c.z,
+            "divergence": c.divergence,
+            "coherence": c.coherence,
+        }
+
+    def _background_to_dicts(self, background: Dict[str, BackgroundPacket]) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        for domain, packet in background.items():
+            out[domain] = {
+                "domain": packet.domain,
+                "notes": packet.notes,
+                "confidence": packet.confidence,
+                "completeness": packet.completeness,
+            }
+        return out
+
+
+# -------------------------------------------------
+#  Quick manual test
+# -------------------------------------------------
+if __name__ == "__main__":
+    ai = SledAI()
+
+    q1 = "Explain the connection between gravity and entropy."
+    res1 = ai.run(q1)
+    print("\nQUESTION 1:", q1)
+    print("STATUS:", res1["status"])
+    if res1["status"] == "answer":
+        print("\nANSWER:\n", res1["answer"])
+    else:
+        print("\nPROBING QUESTIONS:")
+        for pq in res1["probing_questions"]:
+            print("-", pq)
+
+    print("\n" + "="*80 + "\n")
+
+    q2 = "What will happen to this stock price?"
+    res2 = ai.run(q2)
+    print("QUESTION 2:", q2)
+    print("STATUS:", res2["status"])
+    if res2["status"] == "answer":
+        print("\nANSWER:\n", res2["answer"])
+    else:
+        print("\nPROBING QUESTIONS:")
+        for pq in res2["probing_questions"]:
+            print("-", pq)
