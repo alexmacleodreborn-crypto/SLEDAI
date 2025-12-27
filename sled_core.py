@@ -1,118 +1,209 @@
-import numpy as np
 import pandas as pd
-import yfinance as yf
+import numpy as np
 from scipy.stats import entropy
+import yfinance as yf
 from datetime import datetime, timedelta
 
+# ==================================================
+# NEWS FILTERS (RELEVANT ONLY)
+# ==================================================
+NEWS_KEYWORDS = [
+    "earnings", "revenue", "profit", "guidance",
+    "acquisition", "acquire", "merger", "m&a", "divest", "sale", "sell",
+    "regulation", "regulator", "lawsuit", "litigation", "investigation", "probe",
+    "ceo", "cfo", "board", "executive", "resign", "appointed"
+]
+
+NEGATIVE_WORDS = {
+    "miss", "cut", "downgrade", "loss", "decline", "drop", "fall",
+    "investigation", "lawsuit", "fine", "probe", "recall", "delay",
+    "weak", "warning", "slump"
+}
+
+POSITIVE_WORDS = {
+    "beat", "growth", "upgrade", "record",
+    "strong", "expand", "increase", "approval",
+    "surge", "raise", "outperform"
+}
+
+
+def classify_news_sentiment(text: str) -> str:
+    t = (text or "").lower()
+    neg = sum(1 for w in NEGATIVE_WORDS if w in t)
+    pos = sum(1 for w in POSITIVE_WORDS if w in t)
+
+    if neg > pos:
+        return "NEGATIVE"
+    if pos > neg:
+        return "POSITIVE"
+    return "NEUTRAL"
+
+
+def safe_news(ticker: str, limit: int = 8):
+    """
+    Returns ONLY relevant news items for this ticker.
+    Output: list[{ticker,title,sentiment,publisher,link}]
+    """
+    try:
+        tk = yf.Ticker(ticker)
+        raw = tk.news or []
+    except Exception:
+        return []
+
+    relevant = []
+    for item in raw[:limit]:
+        title = item.get("title", "") or ""
+        summary = item.get("summary", "") or ""
+        text = f"{title} {summary}"
+
+        # Strict relevance filter
+        if not any(k in text.lower() for k in NEWS_KEYWORDS):
+            continue
+
+        relevant.append({
+            "ticker": ticker.upper(),
+            "title": title,
+            "sentiment": classify_news_sentiment(text),
+            "publisher": item.get("publisher", "") or "",
+            "link": item.get("link", "") or "",
+        })
+
+    return relevant
+
+
+def apply_news_filter(sled_signal: str, news_items: list):
+    """
+    News can only confirm or cancel an action.
+    It never creates a trade.
+    """
+    sig = (sled_signal or "WAIT").upper()
+
+    if sig == "WAIT":
+        return "WAIT", "No SLED signal"
+
+    if not news_items:
+        return sig, "No relevant news"
+
+    sentiments = {n.get("sentiment", "NEUTRAL") for n in news_items}
+
+    if sig == "BUY":
+        if "NEGATIVE" in sentiments:
+            return "WAIT", "Negative news risk (BUY cancelled)"
+        return "BUY", "News confirms BUY"
+
+    if sig == "SELL":
+        if "POSITIVE" in sentiments:
+            return "WAIT", "Positive news conflict (SELL cancelled)"
+        return "SELL", "News confirms SELL"
+
+    return "WAIT", "Default"
+
+
+# ==================================================
+# YFINANCE SAFE HISTORY
+# ==================================================
 def safe_history(ticker: str, period: str = "6mo"):
     try:
-        t = yf.Ticker(ticker)
-        df = t.history(period=period, auto_adjust=True)
-        if df is None or df.empty or "Close" not in df.columns:
+        df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        if df is None or df.empty:
             return None
-        # Ensure Volume exists
-        if "Volume" not in df.columns:
-            df["Volume"] = 0
+        # fix multiindex columns
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                df.columns = df.columns.droplevel(1)
+            except Exception:
+                df.columns = df.columns.get_level_values(0)
+        df = df.loc[:, ~df.columns.duplicated()]
+        if "Close" not in df.columns:
+            return None
         return df
     except Exception:
         return None
 
+
+# ==================================================
+# SLED ENGINE
+# ==================================================
 class SLEDEngine:
-    """
-    Full SLED Physics:
-    - Z_Trap from normalized rolling volatility
-    - Sigma from rolling entropy (Volume preferred)
-    - Gate = (1-Z)*Sigma
-    - Projected move % (3-day proxy) and RiseScore (14-day proxy ranking)
-    - BUY/SELL signals using Phase-0 logic and price location
-    """
     def __init__(self, window=20, lookback=100, entropy_bins=10):
-        self.window = int(window)
-        self.lookback = int(lookback)
-        self.entropy_bins = int(entropy_bins)
+        self.window = window
+        self.lookback = lookback
+        self.entropy_bins = entropy_bins
 
     def calculate(self, df: pd.DataFrame):
-        if df is None or df.empty or len(df) < max(self.lookback, self.window + 5):
+        try:
+            close = df["Close"]
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+
+            # Velocity
+            df["Log_Return"] = np.log(close / close.shift(1)).fillna(0)
+
+            # Trap (Z)
+            df["Rolling_Std"] = df["Log_Return"].rolling(self.window).std()
+            r_min = df["Rolling_Std"].rolling(self.lookback).min()
+            r_max = df["Rolling_Std"].rolling(self.lookback).max()
+            denom = (r_max - r_min)
+
+            df["Norm_Vol"] = np.where(denom == 0, 0, (df["Rolling_Std"] - r_min) / denom)
+            df["Z_Trap"] = 1 - df["Norm_Vol"]
+
+            # Flow (Sigma) entropy
+            has_vol = ("Volume" in df.columns) and (df["Volume"].sum() > 0)
+
+            def get_ent(s):
+                if len(s) < self.window:
+                    return np.nan
+                h, _ = np.histogram(s, bins=self.entropy_bins)
+                if h.sum() == 0:
+                    return 0.0
+                p = h / h.sum()
+                p = p[p > 0]
+                return entropy(p, base=2)
+
+            if has_vol:
+                vol = df["Volume"]
+                if isinstance(vol, pd.DataFrame):
+                    vol = vol.iloc[:, 0]
+                df["Sigma"] = vol.rolling(self.window).apply(get_ent)
+            else:
+                df["Sigma"] = df["Log_Return"].rolling(self.window).apply(get_ent) * 1.5
+
+            # Gate
+            df["Gate"] = (1 - df["Z_Trap"]) * df["Sigma"]
+
+            # Relative Price Loc (0..1)
+            low = close.rolling(50).min()
+            high = close.rolling(50).max()
+            denom_p = (high - low)
+            df["Price_Loc"] = np.where(denom_p == 0, 0.5, (close - low) / denom_p)
+
+            # Phase-0 threshold
+            ent_thresh = df["Sigma"].rolling(200).quantile(0.85)
+            is_phase_0 = (df["Z_Trap"] > 0.75) & (df["Sigma"] > ent_thresh)
+
+            df["Signal_Buy"] = np.where(is_phase_0 & (df["Price_Loc"] < 0.4), 1, 0)
+            df["Signal_Sell"] = np.where(is_phase_0 & (df["Price_Loc"] > 0.6), 1, 0)
+
+            # Rise score (simple forward proxy): Gate strength + Sigma - Z (bounded)
+            df["RiseScore_14d"] = (
+                (df["Gate"].fillna(0) * 0.6)
+                + (df["Sigma"].fillna(0) * 0.3)
+                - (df["Z_Trap"].fillna(0) * 0.4)
+            )
+
+            return df
+        except Exception:
             return None
-
-        close = df["Close"].astype(float)
-
-        # 1) Velocity
-        df["Log_Return"] = np.log(close / close.shift(1)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
-
-        # 2) Trap (Z)
-        df["Rolling_Std"] = df["Log_Return"].rolling(self.window).std()
-        r_min = df["Rolling_Std"].rolling(self.lookback).min()
-        r_max = df["Rolling_Std"].rolling(self.lookback).max()
-        denom = (r_max - r_min).replace(0, np.nan)
-        norm_vol = (df["Rolling_Std"] - r_min) / denom
-        norm_vol = norm_vol.fillna(0.0).clip(0, 1)
-        df["Z_Trap"] = (1.0 - norm_vol).clip(0, 1)
-
-        # 3) Flow (Sigma) via entropy
-        def ent_fn(series):
-            series = series.dropna()
-            if len(series) < self.window:
-                return np.nan
-            h, _ = np.histogram(series, bins=self.entropy_bins)
-            if h.sum() == 0:
-                return 0.0
-            p = h / h.sum()
-            p = p[p > 0]
-            return float(entropy(p, base=2))
-
-        has_vol = "Volume" in df.columns and df["Volume"].fillna(0).sum() > 0
-        if has_vol:
-            df["Sigma"] = df["Volume"].rolling(self.window).apply(ent_fn, raw=False)
-        else:
-            df["Sigma"] = df["Log_Return"].rolling(self.window).apply(ent_fn, raw=False) * 1.5
-
-        df["Sigma"] = df["Sigma"].fillna(method="bfill").fillna(0.0)
-
-        # 4) Gate
-        df["Gate"] = (1.0 - df["Z_Trap"]) * df["Sigma"]
-
-        # 5) Projected move (3-day proxy)
-        current_vol = float(df["Rolling_Std"].iloc[-1]) if not np.isnan(df["Rolling_Std"].iloc[-1]) else 0.0
-        energy_mult = float(df["Sigma"].iloc[-1])
-        df["Proj_Move_Pct_3d"] = (current_vol * energy_mult * np.sqrt(3.0)) * 100.0
-
-        # 6) Phase-0 signals
-        ent_thresh = df["Sigma"].rolling(200).quantile(0.85).fillna(df["Sigma"].quantile(0.85))
-        is_phase_0 = (df["Z_Trap"] > 0.75) & (df["Sigma"] > ent_thresh)
-
-        r_low = close.rolling(50).min()
-        r_high = close.rolling(50).max()
-        denom_p = (r_high - r_low).replace(0, np.nan)
-        price_loc = ((close - r_low) / denom_p).fillna(0.5).clip(0, 1)
-        df["Price_Loc"] = price_loc
-
-        df["Signal_Buy"]  = np.where(is_phase_0 & (df["Price_Loc"] < 0.4), 1, 0)
-        df["Signal_Sell"] = np.where(is_phase_0 & (df["Price_Loc"] > 0.6), 1, 0)
-
-        # 7) “14-day rising” proxy score
-        # Use: Gate strength + positive drift - penalty for high trap
-        drift = close.pct_change(14).iloc[-1]
-        drift = float(drift) if not np.isnan(drift) else 0.0
-        gate_last = float(df["Gate"].iloc[-1])
-        z_last = float(df["Z_Trap"].iloc[-1])
-        proj3 = float(df["Proj_Move_Pct_3d"].iloc[-1])
-
-        rise_score = (gate_last * 2.0) + (drift * 100.0) + (proj3 * 0.25) - (z_last * 1.0)
-        df["RiseScore_14d"] = rise_score
-
-        return df
 
     def summarize(self, df: pd.DataFrame):
         if df is None or df.empty:
             return None
-
         last = df.iloc[-1]
-        close = float(last["Close"])
-        z = float(last["Z_Trap"])
-        sigma = float(last["Sigma"])
-        gate = float(last["Gate"])
-        proj3 = float(last.get("Proj_Move_Pct_3d", 0.0))
+
+        price = float(last.get("Close", np.nan))
+        z = float(last.get("Z_Trap", np.nan))
+        gate = float(last.get("Gate", np.nan))
         rise = float(last.get("RiseScore_14d", 0.0))
 
         signal = "WAIT"
@@ -121,36 +212,16 @@ class SLEDEngine:
         elif int(last.get("Signal_Sell", 0)) == 1:
             signal = "SELL"
 
-        bullseye_buy = (signal == "BUY") and (gate >= np.nanquantile(df["Gate"].tail(120), 0.85)) and (z < 0.75)
-        bullseye_sell = (signal == "SELL") and (gate >= np.nanquantile(df["Gate"].tail(120), 0.85))
+        # Bullseye markers (tightened)
+        bull_buy = (signal == "BUY") and (gate >= 1.6) and (z <= 0.85)
+        bull_sell = (signal == "SELL") and (gate >= 1.6) and (z <= 0.85)
 
         return {
-            "Price": round(close, 3),
-            "Z_Trap": round(z, 3),
-            "Sigma": round(sigma, 3),
-            "Gate": round(gate, 3),
-            "Proj_Move_Pct_3d": round(proj3, 3),
-            "RiseScore_14d": round(rise, 3),
+            "Price": round(price, 4) if np.isfinite(price) else np.nan,
             "Signal": signal,
-            "Bullseye_BUY": bool(bullseye_buy),
-            "Bullseye_SELL": bool(bullseye_sell),
+            "Z_Trap": round(z, 4) if np.isfinite(z) else np.nan,
+            "Gate": round(gate, 4) if np.isfinite(gate) else np.nan,
+            "RiseScore_14d": round(rise, 4),
+            "Bullseye_BUY": bool(bull_buy),
+            "Bullseye_SELL": bool(bull_sell),
         }
-
-def safe_news(ticker: str, limit: int = 8):
-    """
-    Uses Yahoo news via yfinance. Returns list of dicts with title/publisher/link/time.
-    """
-    try:
-        t = yf.Ticker(ticker)
-        items = t.news or []
-        out = []
-        for n in items[:limit]:
-            out.append({
-                "title": n.get("title", ""),
-                "publisher": n.get("publisher", ""),
-                "link": n.get("link", ""),
-                "providerPublishTime": n.get("providerPublishTime", None)
-            })
-        return out
-    except Exception:
-        return []
