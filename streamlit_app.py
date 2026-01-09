@@ -1,14 +1,14 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.ndimage import label
 
 from core.square import Square
 from core.persistence import Persistence
 from core.sandys_law import compute_Z, compute_Sigma, detect_RP
-from core.proto_objects import cluster_reaction_points
 
 # =====================================================
-# SESSION STATE — WORLD + MEMORY
+# SESSION STATE
 # =====================================================
 
 if "square" not in st.session_state:
@@ -17,74 +17,42 @@ if "square" not in st.session_state:
     st.session_state.prev = None
     st.session_state.frame = 0
 
-if "proto_memory" not in st.session_state:
-    st.session_state.proto_memory = []
+if "basin_memory" not in st.session_state:
+    st.session_state.basin_memory = {}
     st.session_state.next_id = 0
 
 # =====================================================
-# HELPER — PROTO-OBJECT PERSISTENCE
+# Z-BASIN EXTRACTION
 # =====================================================
 
-def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
-    def centroid(cluster):
-        return np.mean(cluster, axis=0)
+def extract_z_basins(Z, z_thresh):
+    """
+    Returns list of basins, each basin is list of (r,c)
+    """
+    mask = Z >= z_thresh
+    labeled, n = label(mask)
 
-    current = [
-        {"centroid": centroid(c), "points": c, "matched": False}
-        for c in current_clusters
-    ]
+    basins = []
+    for i in range(1, n + 1):
+        coords = np.argwhere(labeled == i)
+        if len(coords) > 0:
+            basins.append([tuple(p) for p in coords])
+    return basins
 
-    updated_memory = []
-    annotations = []
-
-    for obj in memory:
-        prev_c = obj["centroid"]
-        best = None
-        best_dist = None
-
-        for c in current:
-            if c["matched"]:
-                continue
-            d = np.linalg.norm(prev_c - c["centroid"])
-            if best is None or d < best_dist:
-                best = c
-                best_dist = d
-
-        if best is not None and best_dist <= dist_thresh:
-            best["matched"] = True
-            updated_memory.append({
-                "id": obj["id"],
-                "centroid": best["centroid"],
-                "points": best["points"],
-                "age": obj["age"] + 1
-            })
-            annotations.append(("survive", best["points"]))
-        else:
-            annotations.append(("die", obj["points"]))
-
-    for c in current:
-        if not c["matched"]:
-            updated_memory.append({
-                "id": next_id,
-                "centroid": c["centroid"],
-                "points": c["points"],
-                "age": 1
-            })
-            annotations.append(("birth", c["points"]))
-            next_id += 1
-
-    return updated_memory, annotations, next_id
+def centroid(points):
+    pts = np.array(points)
+    return np.mean(pts, axis=0)
 
 # =====================================================
 # APP CONFIG
 # =====================================================
 
 st.set_page_config(layout="wide")
-st.title("A7DO-D • Z-Anchored Proto-Objects")
-st.caption("Pre-symbolic cognition • Manual world advance")
+st.title("A7DO-D • Z-Basin Objects")
+st.caption("Structure → Stress → Awareness (no event hallucination)")
 
 # =====================================================
-# SIDEBAR CONTROLS (CLEAN)
+# SIDEBAR CONTROLS
 # =====================================================
 
 st.sidebar.header("World Control")
@@ -93,60 +61,38 @@ advance = st.sidebar.button("▶ Advance World")
 st.sidebar.header("World Geometry")
 size = st.sidebar.slider("Grid size", 16, 64, 32, step=4)
 
-st.sidebar.header("World Motion")
-square_steps = st.sidebar.slider(
-    "Square updates per advance",
-    1, 5, 1
+st.sidebar.header("Dynamics")
+square_steps = st.sidebar.slider("Square updates per step", 1, 4, 1)
+
+st.sidebar.header("Z-Basin Definition")
+z_basin_thresh = st.sidebar.slider(
+    "Z basin threshold",
+    0.2, 0.8, 0.35, step=0.05
 )
 
-st.sidebar.header("Reaction Point Thresholds")
-z_thresh = st.sidebar.slider(
-    "Z threshold (RP)",
-    0.1, 0.9, 0.4, step=0.05
-)
-
+st.sidebar.header("Σ / Reaction Points")
 s_thresh = st.sidebar.slider(
     "Σ threshold",
     0.05, 0.5, 0.10, step=0.05
 )
 
-st.sidebar.header("Z Anchoring")
-z_anchor = st.sidebar.slider(
-    "Minimum mean Z per object",
-    0.1, 0.9, 0.45, step=0.05
+st.sidebar.header("Persistence")
+match_dist = st.sidebar.slider(
+    "Basin match distance",
+    1.0, 6.0, 3.0, step=0.5
 )
-
-st.sidebar.header("Clustering")
-eps = st.sidebar.slider(
-    "Cluster radius ε",
-    1.0, 5.0, 2.5, step=0.5
-)
-
-min_samples = st.sidebar.slider(
-    "Min RP per object",
-    2, 6, 2
-)
-
-st.sidebar.header("Persistence Matching")
-persist_scale = st.sidebar.slider(
-    "Match distance (×ε)",
-    1.0, 2.5, 1.6, step=0.1
-)
-
-st.sidebar.header("Display")
-show_deaths = st.sidebar.checkbox("Show deaths (red)", True)
 
 if st.sidebar.button("Reset WORLD + MEMORY"):
     st.session_state.square = None
     st.session_state.persist = None
     st.session_state.prev = None
-    st.session_state.proto_memory = []
+    st.session_state.basin_memory = {}
     st.session_state.next_id = 0
     st.session_state.frame = 0
-    st.sidebar.success("World and memory reset")
+    st.sidebar.success("Reset complete")
 
 # =====================================================
-# INITIALISE / RESTORE WORLD
+# INITIALISE WORLD
 # =====================================================
 
 if st.session_state.square is None or st.session_state.square.size != size:
@@ -158,12 +104,11 @@ square = st.session_state.square
 persist = st.session_state.persist
 prev = st.session_state.prev
 
-dist_thresh = eps * persist_scale
-annotations = []
+# =====================================================
+# ADVANCE WORLD
+# =====================================================
 
-# =====================================================
-# ADVANCE WORLD (ONLY WHEN CLICKED)
-# =====================================================
+annotations = []
 
 if advance:
     st.session_state.frame += 1
@@ -175,36 +120,63 @@ if advance:
     Z = compute_Z(grid, pmap)
     Sigma = compute_Sigma(grid, prev)
 
-    RP = detect_RP(Z, Sigma, z_thresh=z_thresh, s_thresh=s_thresh)
-    RP_coords = list(zip(RP[0], RP[1]))
+    # --- Z-BASIN OBJECTS ---
+    basins = extract_z_basins(Z, z_basin_thresh)
 
-    raw_clusters = cluster_reaction_points(
-        RP_coords,
-        eps=eps,
-        min_samples=min_samples
-    )
+    new_memory = {}
+    used_prev = set()
 
-    anchored_clusters = []
-    for cluster in raw_clusters:
-        zs = [Z[r, c] for r, c in cluster]
-        if np.mean(zs) >= z_anchor:
-            anchored_clusters.append(cluster)
+    for basin in basins:
+        c = centroid(basin)
 
-    st.session_state.proto_memory, annotations, st.session_state.next_id = (
-        update_proto_persistence(
-            anchored_clusters,
-            st.session_state.proto_memory,
-            st.session_state.next_id,
-            dist_thresh
-        )
-    )
+        best_id = None
+        best_dist = None
 
+        for obj_id, obj in st.session_state.basin_memory.items():
+            d = np.linalg.norm(c - obj["centroid"])
+            if d <= match_dist and (best_dist is None or d < best_dist):
+                best_id = obj_id
+                best_dist = d
+
+        if best_id is not None:
+            # SURVIVE
+            new_memory[best_id] = {
+                "centroid": c,
+                "points": basin,
+                "age": st.session_state.basin_memory[best_id]["age"] + 1
+            }
+            used_prev.add(best_id)
+            annotations.append(("survive", basin))
+        else:
+            # BIRTH
+            obj_id = st.session_state.next_id
+            st.session_state.next_id += 1
+            new_memory[obj_id] = {
+                "centroid": c,
+                "points": basin,
+                "age": 1
+            }
+            annotations.append(("birth", basin))
+
+    # DEATHS
+    for obj_id, obj in st.session_state.basin_memory.items():
+        if obj_id not in used_prev:
+            annotations.append(("die", obj["points"]))
+
+    st.session_state.basin_memory = new_memory
     st.session_state.prev = grid.copy()
 
 else:
     grid = square.grid
     Z = compute_Z(grid, persist.update(grid))
     Sigma = compute_Sigma(grid, prev)
+
+# =====================================================
+# REACTION POINTS (ATTENTION ONLY)
+# =====================================================
+
+RP = detect_RP(Z, Sigma, z_thresh=0.0, s_thresh=s_thresh)
+RP_coords = list(zip(RP[0], RP[1]))
 
 # =====================================================
 # VISUALS
@@ -220,47 +192,41 @@ with col1:
     st.pyplot(fig)
 
 with col2:
-    st.subheader("Z — Trap Strength")
+    st.subheader("Z (Structure)")
     fig, ax = plt.subplots()
     ax.imshow(Z, cmap="inferno")
     ax.axis("off")
     st.pyplot(fig)
 
 with col3:
-    st.subheader("Σ — Entropy")
+    st.subheader("Σ (Change)")
     fig, ax = plt.subplots()
     ax.imshow(Sigma, cmap="viridis")
     ax.axis("off")
     st.pyplot(fig)
 
 # =====================================================
-# EVENTS
+# Z-BASIN OBJECT VIEW
 # =====================================================
 
 st.divider()
-st.subheader(f"Proto-Object Events (Frame {st.session_state.frame})")
-
-obj_births = sum(1 for s, _ in annotations if s == "birth")
-obj_survive = sum(1 for s, _ in annotations if s == "survive")
-obj_deaths = sum(1 for s, _ in annotations if s == "die")
-
-st.write(
-    f"Births: **{obj_births}** • "
-    f"Survive: **{obj_survive}** • "
-    f"Deaths: **{obj_deaths}**"
-)
+st.subheader(f"Z-Basin Objects — Frame {st.session_state.frame}")
 
 fig, ax = plt.subplots()
 ax.imshow(grid, cmap="gray")
 
 colors = {"birth": "lime", "survive": "cyan", "die": "red"}
 
-for state, points in annotations:
-    if state == "die" and not show_deaths:
-        continue
-    pts = np.array(points)
-    ax.scatter(pts[:, 1], pts[:, 0], c=colors[state], s=30)
+for state, basin in annotations:
+    pts = np.array(basin)
+    ax.scatter(pts[:,1], pts[:,0], c=colors[state], s=25, alpha=0.9)
 
+# Overlay attention (RP)
+if RP_coords:
+    rp = np.array(RP_coords)
+    ax.scatter(rp[:,1], rp[:,0], c="white", s=8, alpha=0.4)
+
+ax.set_title("Green=Birth • Cyan=Survive • Red=Death • White=Attention (Σ)")
 ax.axis("off")
 st.pyplot(fig)
 
@@ -271,17 +237,21 @@ st.pyplot(fig)
 st.divider()
 st.subheader("System Summary")
 
-ages = [obj["age"] for obj in st.session_state.proto_memory]
+births = sum(1 for s,_ in annotations if s == "birth")
+survive = sum(1 for s,_ in annotations if s == "survive")
+deaths = sum(1 for s,_ in annotations if s == "die")
+
+ages = [obj["age"] for obj in st.session_state.basin_memory.values()]
 
 colA, colB, colC = st.columns(3)
 
 with colA:
     st.metric("Frame", st.session_state.frame)
-    st.metric("Grid Size", f"{size}×{size}")
+    st.metric("Active Objects", len(ages))
 
 with colB:
-    st.metric("Persistent Objects", len(ages))
-    st.metric("Oldest Object Age", max(ages) if ages else 0)
+    st.metric("Births", births)
+    st.metric("Deaths", deaths)
 
 with colC:
     st.write("Object ages:", ages if ages else "—")
@@ -291,6 +261,6 @@ with colC:
 # =====================================================
 
 st.caption(
-    "A7DO-D • Sandy’s Law • "
-    "Time advances only when the world is invoked"
+    "A7DO-D Phase II • Objects defined by structure (Z), not events (Σ). "
+    "Stress reveals — it does not create."
 )
