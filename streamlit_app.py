@@ -8,20 +8,25 @@ from core.sandys_law import compute_Z, compute_Sigma, detect_RP
 from core.proto_objects import cluster_reaction_points
 
 # =====================================================
-# SESSION STATE (PROTO-OBJECT MEMORY)
+# SESSION STATE — WORLD + MEMORY
 # =====================================================
+
+if "square" not in st.session_state:
+    st.session_state.square = None
+    st.session_state.persist = None
+    st.session_state.prev = None
 
 if "proto_memory" not in st.session_state:
     st.session_state.proto_memory = []
     st.session_state.next_id = 0
 
 # =====================================================
-# HELPER: PERSISTENCE MATCHING
+# HELPER — PROTO-OBJECT PERSISTENCE
 # =====================================================
 
 def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
     """
-    Match proto-objects across frames using centroid continuity.
+    Physics-first persistence via centroid continuity.
     """
 
     def centroid(cluster):
@@ -76,7 +81,7 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
     return updated_memory, annotations, next_id
 
 # =====================================================
-# CONFIG
+# APP CONFIG
 # =====================================================
 
 st.set_page_config(layout="wide")
@@ -84,7 +89,7 @@ st.title("A7DO-D • Square × Sandy’s Law")
 st.caption("Pre-symbolic cognition • Structure → Stress → Memory")
 
 # =====================================================
-# SIDEBAR CONTROLS (NO `steps`)
+# SIDEBAR CONTROLS
 # =====================================================
 
 st.sidebar.header("World Geometry")
@@ -94,14 +99,14 @@ st.sidebar.header("World Motion")
 square_steps = st.sidebar.slider(
     "Square updates per frame",
     1, 5, 1,
-    help="Lower = more stable memory"
+    help="Lower values allow memory to form"
 )
 
 st.sidebar.header("Memory Evolution")
 memory_steps = st.sidebar.slider(
     "Persistence frames",
     3, 20, 8,
-    help="More frames → more chance of survival"
+    help="Frames over which memory is evaluated"
 )
 
 st.sidebar.header("Reaction Point Thresholds")
@@ -121,23 +126,31 @@ persist_scale = st.sidebar.slider(
 
 show_deaths = st.sidebar.checkbox("Show deaths (red)", value=True)
 
-if st.sidebar.button("Reset proto-memory"):
+if st.sidebar.button("Reset WORLD + MEMORY"):
+    st.session_state.square = None
+    st.session_state.persist = None
+    st.session_state.prev = None
     st.session_state.proto_memory = []
     st.session_state.next_id = 0
-    st.sidebar.success("Proto-memory reset")
+    st.sidebar.success("World and memory reset")
 
 # =====================================================
-# INITIALISE WORLD
+# INITIALISE / RESTORE WORLD
 # =====================================================
 
-square = Square(size=size)
-persist = Persistence(size)
-prev = square.grid.copy()
+if st.session_state.square is None or st.session_state.square.size != size:
+    st.session_state.square = Square(size=size)
+    st.session_state.persist = Persistence(size)
+    st.session_state.prev = st.session_state.square.grid.copy()
+
+square = st.session_state.square
+persist = st.session_state.persist
+prev = st.session_state.prev
 
 dist_thresh = eps * persist_scale
 
 # =====================================================
-# MEMORY EVOLUTION LOOP (TRUE MEMORY)
+# MEMORY EVOLUTION LOOP (TRUE CONTINUITY)
 # =====================================================
 
 all_annotations = []
@@ -148,7 +161,7 @@ final_RP_coords = []
 
 for _ in range(memory_steps):
 
-    # Gentle evolution
+    # Gentle evolution inside same universe
     for _ in range(square_steps):
         grid = square.step()
         pmap = persist.update(grid)
@@ -181,28 +194,30 @@ for _ in range(memory_steps):
     final_RP_coords = RP_coords
     prev = grid.copy()
 
+st.session_state.prev = prev
+
 # =====================================================
-# VISUALS
+# VISUALISATION
 # =====================================================
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("Square")
+    st.subheader("Square (Structure)")
     fig, ax = plt.subplots()
     ax.imshow(final_grid, cmap="gray")
     ax.axis("off")
     st.pyplot(fig)
 
 with col2:
-    st.subheader("Z (Trap Strength)")
+    st.subheader("Z — Trap Strength")
     fig, ax = plt.subplots()
     ax.imshow(final_Z, cmap="inferno")
     ax.axis("off")
     st.pyplot(fig)
 
 with col3:
-    st.subheader("Σ (Entropy)")
+    st.subheader("Σ — Entropy / Change")
     fig, ax = plt.subplots()
     ax.imshow(final_Sigma, cmap="viridis")
     ax.axis("off")
@@ -219,7 +234,11 @@ births = sum(1 for s, _ in all_annotations if s == "birth")
 survivals = sum(1 for s, _ in all_annotations if s == "survive")
 deaths = sum(1 for s, _ in all_annotations if s == "die")
 
-st.write(f"Births: **{births}** • Survive: **{survivals}** • Deaths: **{deaths}**")
+st.write(
+    f"Births: **{births}** • "
+    f"Survive: **{survivals}** • "
+    f"Deaths: **{deaths}**"
+)
 st.write(f"Match distance: **{dist_thresh:.2f} cells**")
 
 fig, ax = plt.subplots()
@@ -237,7 +256,7 @@ ax.axis("off")
 st.pyplot(fig)
 
 # =====================================================
-# SUMMARY (NO `steps`)
+# SUMMARY
 # =====================================================
 
 st.divider()
@@ -268,5 +287,5 @@ with colC:
 
 st.caption(
     "A7DO-D • Sandy’s Law compliant • "
-    "Memory emerges only when structure permits"
+    "Memory requires a persistent universe"
 )
