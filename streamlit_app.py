@@ -25,9 +25,10 @@ if "basin_memory" not in st.session_state:
 # Z-BASIN EXTRACTION
 # =====================================================
 
-def extract_z_basins(Z, z_thresh):
+def extract_z_basins(Z, z_thresh, min_size):
     """
-    Returns list of basins, each basin is list of (r,c)
+    Extract connected Z-basins above threshold and filter by size.
+    Returns list of basins, each basin is list of (row, col).
     """
     mask = Z >= z_thresh
     labeled, n = label(mask)
@@ -35,7 +36,7 @@ def extract_z_basins(Z, z_thresh):
     basins = []
     for i in range(1, n + 1):
         coords = np.argwhere(labeled == i)
-        if len(coords) > 0:
+        if len(coords) >= min_size:
             basins.append([tuple(p) for p in coords])
     return basins
 
@@ -48,8 +49,8 @@ def centroid(points):
 # =====================================================
 
 st.set_page_config(layout="wide")
-st.title("A7DO-D • Z-Basin Objects")
-st.caption("Structure → Stress → Awareness (no event hallucination)")
+st.title("A7DO-D • Z-Basin Objects (Consolidated)")
+st.caption("Structure → Scale → Stress → Awareness")
 
 # =====================================================
 # SIDEBAR CONTROLS
@@ -68,6 +69,11 @@ st.sidebar.header("Z-Basin Definition")
 z_basin_thresh = st.sidebar.slider(
     "Z basin threshold",
     0.2, 0.8, 0.35, step=0.05
+)
+
+min_basin_size = st.sidebar.slider(
+    "Minimum basin size (cells)",
+    5, 50, 12, step=1
 )
 
 st.sidebar.header("Σ / Reaction Points")
@@ -89,7 +95,7 @@ if st.sidebar.button("Reset WORLD + MEMORY"):
     st.session_state.basin_memory = {}
     st.session_state.next_id = 0
     st.session_state.frame = 0
-    st.sidebar.success("Reset complete")
+    st.sidebar.success("World and memory reset")
 
 # =====================================================
 # INITIALISE WORLD
@@ -104,11 +110,11 @@ square = st.session_state.square
 persist = st.session_state.persist
 prev = st.session_state.prev
 
+annotations = []
+
 # =====================================================
 # ADVANCE WORLD
 # =====================================================
-
-annotations = []
 
 if advance:
     st.session_state.frame += 1
@@ -120,8 +126,8 @@ if advance:
     Z = compute_Z(grid, pmap)
     Sigma = compute_Sigma(grid, prev)
 
-    # --- Z-BASIN OBJECTS ---
-    basins = extract_z_basins(Z, z_basin_thresh)
+    # --- Z-BASIN OBJECTS WITH SCALE ---
+    basins = extract_z_basins(Z, z_basin_thresh, min_basin_size)
 
     new_memory = {}
     used_prev = set()
@@ -206,7 +212,7 @@ with col3:
     st.pyplot(fig)
 
 # =====================================================
-# Z-BASIN OBJECT VIEW
+# OBJECT VIEW
 # =====================================================
 
 st.divider()
@@ -219,14 +225,14 @@ colors = {"birth": "lime", "survive": "cyan", "die": "red"}
 
 for state, basin in annotations:
     pts = np.array(basin)
-    ax.scatter(pts[:,1], pts[:,0], c=colors[state], s=25, alpha=0.9)
+    ax.scatter(pts[:,1], pts[:,0], c=colors[state], s=28, alpha=0.9)
 
-# Overlay attention (RP)
+# Attention overlay
 if RP_coords:
     rp = np.array(RP_coords)
-    ax.scatter(rp[:,1], rp[:,0], c="white", s=8, alpha=0.4)
+    ax.scatter(rp[:,1], rp[:,0], c="white", s=8, alpha=0.35)
 
-ax.set_title("Green=Birth • Cyan=Survive • Red=Death • White=Attention (Σ)")
+ax.set_title("Green=Birth • Cyan=Survive • Red=Death • White=Attention")
 ax.axis("off")
 st.pyplot(fig)
 
@@ -261,6 +267,6 @@ with colC:
 # =====================================================
 
 st.caption(
-    "A7DO-D Phase II • Objects defined by structure (Z), not events (Σ). "
-    "Stress reveals — it does not create."
+    "A7DO-D Phase II • Objects require structure + scale. "
+    "Stress reveals them; it does not invent them."
 )
