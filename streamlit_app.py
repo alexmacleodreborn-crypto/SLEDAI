@@ -25,19 +25,30 @@ Sigma = compute_Sigma(grid, prev)
 RP = detect_RP(Z, Sigma)
 T_info = compute_T_info(Z, Sigma)
 
+import matplotlib.pyplot as plt
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.subheader("Square")
-    st.imshow(grid, cmap="gray")
+    fig, ax = plt.subplots()
+    ax.imshow(grid, cmap="gray")
+    ax.axis("off")
+    st.pyplot(fig)
 
 with col2:
     st.subheader("Z (Trap Strength)")
-    st.imshow(Z, cmap="inferno")
+    fig, ax = plt.subplots()
+    ax.imshow(Z, cmap="inferno")
+    ax.axis("off")
+    st.pyplot(fig)
 
 with col3:
     st.subheader("Σ (Entropy)")
-    st.imshow(Sigma, cmap="viridis")
+    fig, ax = plt.subplots()
+    ax.imshow(Sigma, cmap="viridis")
+    ax.axis("off")
+    st.pyplot(fig)
 
 st.subheader("Reaction Points")
 st.write(f"RP count: {len(RP[0])}")
