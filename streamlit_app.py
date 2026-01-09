@@ -25,10 +25,6 @@ if "proto_memory" not in st.session_state:
 # =====================================================
 
 def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
-    """
-    Physics-first persistence via centroid continuity.
-    """
-
     def centroid(cluster):
         return np.mean(cluster, axis=0)
 
@@ -40,7 +36,6 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
     updated_memory = []
     annotations = []
 
-    # Match existing memory
     for obj in memory:
         prev_c = obj["centroid"]
         best = None
@@ -66,7 +61,6 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
         else:
             annotations.append(("die", obj["points"]))
 
-    # Births
     for c in current:
         if not c["matched"]:
             updated_memory.append({
@@ -81,12 +75,12 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
     return updated_memory, annotations, next_id
 
 # =====================================================
-# APP CONFIG
+# CONFIG
 # =====================================================
 
 st.set_page_config(layout="wide")
-st.title("A7DO-D • Square × Sandy’s Law")
-st.caption("Pre-symbolic cognition • Structure → Stress → Memory")
+st.title("A7DO-D • Z-Anchored Proto-Objects")
+st.caption("Objects emerge from sustained trap basins (Z), not events")
 
 # =====================================================
 # SIDEBAR CONTROLS
@@ -96,35 +90,29 @@ st.sidebar.header("World Geometry")
 size = st.sidebar.slider("Grid size", 16, 64, 32, step=4)
 
 st.sidebar.header("World Motion")
-square_steps = st.sidebar.slider(
-    "Square updates per frame",
-    1, 5, 1,
-    help="Lower values allow memory to form"
-)
+square_steps = st.sidebar.slider("Square updates per frame", 1, 5, 1)
 
 st.sidebar.header("Memory Evolution")
-memory_steps = st.sidebar.slider(
-    "Persistence frames",
-    3, 20, 8,
-    help="Frames over which memory is evaluated"
-)
+memory_steps = st.sidebar.slider("Persistence frames", 3, 20, 10)
 
 st.sidebar.header("Reaction Point Thresholds")
-z_thresh = st.sidebar.slider("Z threshold", 0.1, 0.9, 0.4, step=0.05)
+z_thresh = st.sidebar.slider("Z threshold (RP)", 0.1, 0.9, 0.4, step=0.05)
 s_thresh = st.sidebar.slider("Σ threshold", 0.05, 0.5, 0.15, step=0.05)
+
+st.sidebar.header("Z-Anchoring (IMPORTANT)")
+z_anchor = st.sidebar.slider(
+    "Minimum mean Z per proto-object",
+    0.1, 0.9, 0.55, step=0.05,
+    help="Objects only exist in sustained trap basins"
+)
 
 st.sidebar.header("Proto-Object Clustering")
 eps = st.sidebar.slider("Cluster radius ε", 1.0, 5.0, 2.5, step=0.5)
 min_samples = st.sidebar.slider("Min RP per object", 2, 6, 3)
 
-st.sidebar.header("Persistence Matching")
-persist_scale = st.sidebar.slider(
-    "Match distance (×ε)",
-    1.0, 2.5, 1.6,
-    step=0.1
-)
+persist_scale = st.sidebar.slider("Match distance (×ε)", 1.0, 2.5, 1.6, step=0.1)
 
-show_deaths = st.sidebar.checkbox("Show deaths (red)", value=True)
+show_deaths = st.sidebar.checkbox("Show deaths (red)", True)
 
 if st.sidebar.button("Reset WORLD + MEMORY"):
     st.session_state.square = None
@@ -150,18 +138,14 @@ prev = st.session_state.prev
 dist_thresh = eps * persist_scale
 
 # =====================================================
-# MEMORY EVOLUTION LOOP (TRUE CONTINUITY)
+# MEMORY EVOLUTION LOOP
 # =====================================================
 
 all_annotations = []
-final_grid = None
-final_Z = None
-final_Sigma = None
-final_RP_coords = []
+final_grid = final_Z = final_Sigma = None
 
 for _ in range(memory_steps):
 
-    # Gentle evolution inside same universe
     for _ in range(square_steps):
         grid = square.step()
         pmap = persist.update(grid)
@@ -171,15 +155,25 @@ for _ in range(memory_steps):
     RP = detect_RP(Z, Sigma, z_thresh=z_thresh, s_thresh=s_thresh)
     RP_coords = list(zip(RP[0], RP[1]))
 
-    proto_objects = cluster_reaction_points(
+    # -------------------------------------------------
+    # Z-ANCHORED PROTO-OBJECTS (KEY CHANGE)
+    # -------------------------------------------------
+
+    raw_clusters = cluster_reaction_points(
         RP_coords,
         eps=eps,
         min_samples=min_samples
     )
 
+    anchored_clusters = []
+    for cluster in raw_clusters:
+        zs = [Z[r, c] for r, c in cluster]
+        if np.mean(zs) >= z_anchor:
+            anchored_clusters.append(cluster)
+
     st.session_state.proto_memory, annotations, st.session_state.next_id = (
         update_proto_persistence(
-            proto_objects,
+            anchored_clusters,
             st.session_state.proto_memory,
             st.session_state.next_id,
             dist_thresh
@@ -191,7 +185,6 @@ for _ in range(memory_steps):
     final_grid = grid
     final_Z = Z
     final_Sigma = Sigma
-    final_RP_coords = RP_coords
     prev = grid.copy()
 
 st.session_state.prev = prev
@@ -203,7 +196,7 @@ st.session_state.prev = prev
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("Square (Structure)")
+    st.subheader("Square")
     fig, ax = plt.subplots()
     ax.imshow(final_grid, cmap="gray")
     ax.axis("off")
@@ -217,7 +210,7 @@ with col2:
     st.pyplot(fig)
 
 with col3:
-    st.subheader("Σ — Entropy / Change")
+    st.subheader("Σ — Entropy")
     fig, ax = plt.subplots()
     ax.imshow(final_Sigma, cmap="viridis")
     ax.axis("off")
@@ -228,18 +221,14 @@ with col3:
 # =====================================================
 
 st.divider()
-st.subheader("Proto-Object Persistence (Memory)")
+st.subheader("Proto-Object Persistence (Z-Anchored)")
 
 births = sum(1 for s, _ in all_annotations if s == "birth")
 survivals = sum(1 for s, _ in all_annotations if s == "survive")
 deaths = sum(1 for s, _ in all_annotations if s == "die")
 
-st.write(
-    f"Births: **{births}** • "
-    f"Survive: **{survivals}** • "
-    f"Deaths: **{deaths}**"
-)
-st.write(f"Match distance: **{dist_thresh:.2f} cells**")
+st.write(f"Births: **{births}** • Survive: **{survivals}** • Deaths: **{deaths}**")
+st.write(f"Z-anchor threshold: **{z_anchor:.2f}**")
 
 fig, ax = plt.subplots()
 ax.imshow(final_grid, cmap="gray")
@@ -271,21 +260,16 @@ with colA:
     st.metric("Square Updates / Frame", square_steps)
 
 with colB:
-    st.metric("Memory Frames", memory_steps)
     st.metric("Persistent Objects", len(ages))
+    st.metric("Oldest Object Age", max(ages) if ages else 0)
 
 with colC:
-    if ages:
-        st.metric("Oldest Object Age", max(ages))
-        st.write("Object ages:", ages)
-    else:
-        st.write("No long-lived objects yet")
+    st.write("Object ages:", ages if ages else "—")
 
 # =====================================================
 # FOOTER
 # =====================================================
 
 st.caption(
-    "A7DO-D • Sandy’s Law compliant • "
-    "Memory requires a persistent universe"
+    "A7DO-D • Sandy’s Law • Objects persist where Z dominates Σ"
 )
