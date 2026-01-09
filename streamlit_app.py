@@ -81,10 +81,10 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
 
 st.set_page_config(layout="wide")
 st.title("A7DO-D • Z-Anchored Proto-Objects")
-st.caption("Pre-symbolic cognition • No background time • Manual evolution")
+st.caption("Pre-symbolic cognition • Manual world advance")
 
 # =====================================================
-# SIDEBAR CONTROLS
+# SIDEBAR CONTROLS (CLEAN)
 # =====================================================
 
 st.sidebar.header("World Control")
@@ -94,11 +94,21 @@ st.sidebar.header("World Geometry")
 size = st.sidebar.slider("Grid size", 16, 64, 32, step=4)
 
 st.sidebar.header("World Motion")
-square_steps = st.sidebar.slider("Square updates per advance", 1, 5, 1)
+square_steps = st.sidebar.slider(
+    "Square updates per advance",
+    1, 5, 1
+)
 
 st.sidebar.header("Reaction Point Thresholds")
-z_thresh = st.sidebar.slider("Z threshold (RP)", 0.1, 0.9, 0.4, step=0.05)
-s_thresh = st.sidebar.slider("Σ threshold", 0.05, 0.5, 0.10, step=0.05)
+z_thresh = st.sidebar.slider(
+    "Z threshold (RP)",
+    0.1, 0.9, 0.4, step=0.05
+)
+
+s_thresh = st.sidebar.slider(
+    "Σ threshold",
+    0.05, 0.5, 0.10, step=0.05
+)
 
 st.sidebar.header("Z Anchoring")
 z_anchor = st.sidebar.slider(
@@ -107,5 +117,180 @@ z_anchor = st.sidebar.slider(
 )
 
 st.sidebar.header("Clustering")
-eps = st.sidebar.slider("Cluster radius ε", 1.0, 5.0, 2.5, step=0.5)
-min_samples = st.sidebar.slider("Min RP
+eps = st.sidebar.slider(
+    "Cluster radius ε",
+    1.0, 5.0, 2.5, step=0.5
+)
+
+min_samples = st.sidebar.slider(
+    "Min RP per object",
+    2, 6, 2
+)
+
+st.sidebar.header("Persistence Matching")
+persist_scale = st.sidebar.slider(
+    "Match distance (×ε)",
+    1.0, 2.5, 1.6, step=0.1
+)
+
+st.sidebar.header("Display")
+show_deaths = st.sidebar.checkbox("Show deaths (red)", True)
+
+if st.sidebar.button("Reset WORLD + MEMORY"):
+    st.session_state.square = None
+    st.session_state.persist = None
+    st.session_state.prev = None
+    st.session_state.proto_memory = []
+    st.session_state.next_id = 0
+    st.session_state.frame = 0
+    st.sidebar.success("World and memory reset")
+
+# =====================================================
+# INITIALISE / RESTORE WORLD
+# =====================================================
+
+if st.session_state.square is None or st.session_state.square.size != size:
+    st.session_state.square = Square(size=size)
+    st.session_state.persist = Persistence(size)
+    st.session_state.prev = st.session_state.square.grid.copy()
+
+square = st.session_state.square
+persist = st.session_state.persist
+prev = st.session_state.prev
+
+dist_thresh = eps * persist_scale
+annotations = []
+
+# =====================================================
+# ADVANCE WORLD (ONLY WHEN CLICKED)
+# =====================================================
+
+if advance:
+    st.session_state.frame += 1
+
+    for _ in range(square_steps):
+        grid = square.step()
+        pmap = persist.update(grid)
+
+    Z = compute_Z(grid, pmap)
+    Sigma = compute_Sigma(grid, prev)
+
+    RP = detect_RP(Z, Sigma, z_thresh=z_thresh, s_thresh=s_thresh)
+    RP_coords = list(zip(RP[0], RP[1]))
+
+    raw_clusters = cluster_reaction_points(
+        RP_coords,
+        eps=eps,
+        min_samples=min_samples
+    )
+
+    anchored_clusters = []
+    for cluster in raw_clusters:
+        zs = [Z[r, c] for r, c in cluster]
+        if np.mean(zs) >= z_anchor:
+            anchored_clusters.append(cluster)
+
+    st.session_state.proto_memory, annotations, st.session_state.next_id = (
+        update_proto_persistence(
+            anchored_clusters,
+            st.session_state.proto_memory,
+            st.session_state.next_id,
+            dist_thresh
+        )
+    )
+
+    st.session_state.prev = grid.copy()
+
+else:
+    grid = square.grid
+    Z = compute_Z(grid, persist.update(grid))
+    Sigma = compute_Sigma(grid, prev)
+
+# =====================================================
+# VISUALS
+# =====================================================
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("Square")
+    fig, ax = plt.subplots()
+    ax.imshow(grid, cmap="gray")
+    ax.axis("off")
+    st.pyplot(fig)
+
+with col2:
+    st.subheader("Z — Trap Strength")
+    fig, ax = plt.subplots()
+    ax.imshow(Z, cmap="inferno")
+    ax.axis("off")
+    st.pyplot(fig)
+
+with col3:
+    st.subheader("Σ — Entropy")
+    fig, ax = plt.subplots()
+    ax.imshow(Sigma, cmap="viridis")
+    ax.axis("off")
+    st.pyplot(fig)
+
+# =====================================================
+# EVENTS
+# =====================================================
+
+st.divider()
+st.subheader(f"Proto-Object Events (Frame {st.session_state.frame})")
+
+obj_births = sum(1 for s, _ in annotations if s == "birth")
+obj_survive = sum(1 for s, _ in annotations if s == "survive")
+obj_deaths = sum(1 for s, _ in annotations if s == "die")
+
+st.write(
+    f"Births: **{obj_births}** • "
+    f"Survive: **{obj_survive}** • "
+    f"Deaths: **{obj_deaths}**"
+)
+
+fig, ax = plt.subplots()
+ax.imshow(grid, cmap="gray")
+
+colors = {"birth": "lime", "survive": "cyan", "die": "red"}
+
+for state, points in annotations:
+    if state == "die" and not show_deaths:
+        continue
+    pts = np.array(points)
+    ax.scatter(pts[:, 1], pts[:, 0], c=colors[state], s=30)
+
+ax.axis("off")
+st.pyplot(fig)
+
+# =====================================================
+# SUMMARY
+# =====================================================
+
+st.divider()
+st.subheader("System Summary")
+
+ages = [obj["age"] for obj in st.session_state.proto_memory]
+
+colA, colB, colC = st.columns(3)
+
+with colA:
+    st.metric("Frame", st.session_state.frame)
+    st.metric("Grid Size", f"{size}×{size}")
+
+with colB:
+    st.metric("Persistent Objects", len(ages))
+    st.metric("Oldest Object Age", max(ages) if ages else 0)
+
+with colC:
+    st.write("Object ages:", ages if ages else "—")
+
+# =====================================================
+# FOOTER
+# =====================================================
+
+st.caption(
+    "A7DO-D • Sandy’s Law • "
+    "Time advances only when the world is invoked"
+)
