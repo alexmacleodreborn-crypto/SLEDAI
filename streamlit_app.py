@@ -36,6 +36,7 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
     updated_memory = []
     annotations = []
 
+    # Match existing objects
     for obj in memory:
         prev_c = obj["centroid"]
         best = None
@@ -61,6 +62,7 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
         else:
             annotations.append(("die", obj["points"]))
 
+    # Births
     for c in current:
         if not c["matched"]:
             updated_memory.append({
@@ -80,7 +82,7 @@ def update_proto_persistence(current_clusters, memory, next_id, dist_thresh):
 
 st.set_page_config(layout="wide")
 st.title("A7DO-D • Z-Anchored Proto-Objects")
-st.caption("Objects emerge from sustained trap basins (Z), not events")
+st.caption("Objects persist where Z dominates Σ")
 
 # =====================================================
 # SIDEBAR CONTROLS
@@ -99,20 +101,21 @@ st.sidebar.header("Reaction Point Thresholds")
 z_thresh = st.sidebar.slider("Z threshold (RP)", 0.1, 0.9, 0.4, step=0.05)
 s_thresh = st.sidebar.slider("Σ threshold", 0.05, 0.5, 0.15, step=0.05)
 
-st.sidebar.header("Z-Anchoring (IMPORTANT)")
+st.sidebar.header("Z Anchoring")
 z_anchor = st.sidebar.slider(
-    "Minimum mean Z per proto-object",
-    0.1, 0.9, 0.55, step=0.05,
-    help="Objects only exist in sustained trap basins"
+    "Minimum mean Z per object",
+    0.1, 0.9, 0.55, step=0.05
 )
 
-st.sidebar.header("Proto-Object Clustering")
+st.sidebar.header("Clustering")
 eps = st.sidebar.slider("Cluster radius ε", 1.0, 5.0, 2.5, step=0.5)
 min_samples = st.sidebar.slider("Min RP per object", 2, 6, 3)
 
 persist_scale = st.sidebar.slider("Match distance (×ε)", 1.0, 2.5, 1.6, step=0.1)
 
+st.sidebar.header("Display")
 show_deaths = st.sidebar.checkbox("Show deaths (red)", True)
+show_history = st.sidebar.checkbox("Show full history", False)
 
 if st.sidebar.button("Reset WORLD + MEMORY"):
     st.session_state.square = None
@@ -142,6 +145,8 @@ dist_thresh = eps * persist_scale
 # =====================================================
 
 all_annotations = []
+last_annotations = []
+
 final_grid = final_Z = final_Sigma = None
 
 for _ in range(memory_steps):
@@ -155,16 +160,13 @@ for _ in range(memory_steps):
     RP = detect_RP(Z, Sigma, z_thresh=z_thresh, s_thresh=s_thresh)
     RP_coords = list(zip(RP[0], RP[1]))
 
-    # -------------------------------------------------
-    # Z-ANCHORED PROTO-OBJECTS (KEY CHANGE)
-    # -------------------------------------------------
-
     raw_clusters = cluster_reaction_points(
         RP_coords,
         eps=eps,
         min_samples=min_samples
     )
 
+    # ---------------- Z-ANCHORING ----------------
     anchored_clusters = []
     for cluster in raw_clusters:
         zs = [Z[r, c] for r, c in cluster]
@@ -180,6 +182,7 @@ for _ in range(memory_steps):
         )
     )
 
+    last_annotations = annotations
     all_annotations.extend(annotations)
 
     final_grid = grid
@@ -189,8 +192,10 @@ for _ in range(memory_steps):
 
 st.session_state.prev = prev
 
+display_annotations = all_annotations if show_history else last_annotations
+
 # =====================================================
-# VISUALISATION
+# VISUALS
 # =====================================================
 
 col1, col2, col3 = st.columns(3)
@@ -221,21 +226,31 @@ with col3:
 # =====================================================
 
 st.divider()
-st.subheader("Proto-Object Persistence (Z-Anchored)")
+st.subheader("Proto-Object Persistence")
 
-births = sum(1 for s, _ in all_annotations if s == "birth")
-survivals = sum(1 for s, _ in all_annotations if s == "survive")
-deaths = sum(1 for s, _ in all_annotations if s == "die")
+# ---- OBJECT COUNTS ----
+obj_births = sum(1 for s, _ in display_annotations if s == "birth")
+obj_survive = sum(1 for s, _ in display_annotations if s == "survive")
+obj_deaths = sum(1 for s, _ in display_annotations if s == "die")
 
-st.write(f"Births: **{births}** • Survive: **{survivals}** • Deaths: **{deaths}**")
-st.write(f"Z-anchor threshold: **{z_anchor:.2f}**")
+# ---- POINT COUNTS ----
+pt_births = sum(len(p) for s, p in display_annotations if s == "birth")
+pt_survive = sum(len(p) for s, p in display_annotations if s == "survive")
+pt_deaths = sum(len(p) for s, p in display_annotations if s == "die")
+
+st.write(
+    f"**Object events** — Births: {obj_births} • Survive: {obj_survive} • Deaths: {obj_deaths}"
+)
+st.write(
+    f"**Point volume** — Birth: {pt_births} • Survive: {pt_survive} • Death: {pt_deaths}"
+)
 
 fig, ax = plt.subplots()
 ax.imshow(final_grid, cmap="gray")
 
 color_map = {"birth": "lime", "survive": "cyan", "die": "red"}
 
-for state, points in all_annotations:
+for state, points in display_annotations:
     if state == "die" and not show_deaths:
         continue
     pts = np.array(points)
@@ -271,5 +286,6 @@ with colC:
 # =====================================================
 
 st.caption(
-    "A7DO-D • Sandy’s Law • Objects persist where Z dominates Σ"
+    "A7DO-D • Sandy’s Law • "
+    "Objects are Z-anchored basins, not reaction events"
 )
