@@ -52,3 +52,11 @@ with col3:
 
 st.subheader("Reaction Points")
 st.write(f"RP count: {len(RP[0])}")
+
+# Overlay RP on Square
+fig, ax = plt.subplots()
+ax.imshow(grid, cmap="gray")
+ax.scatter(RP[1], RP[0], c="red", s=10)
+ax.set_title("Square + Reaction Points")
+ax.axis("off")
+st.pyplot(fig)
