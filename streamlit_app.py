@@ -4,6 +4,8 @@ from core.square import Square
 from core.persistence import Persistence
 from core.clusters import compute_clusters
 from core.sandys_law import compute_Z, compute_Sigma, detect_RP, compute_T_info
+from core.proto_objects import cluster_reaction_points
+
 
 st.set_page_config(layout="wide")
 st.title("A7DO-D • Square × Sandy’s Law")
